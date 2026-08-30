@@ -7,29 +7,25 @@ import {
 	DialogTitle,
 	DialogTrigger
 } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { ChartAreaIcon } from 'lucide-react';
 import { BandwidthHistoryChart } from './BandwidthHistoryChart';
 import { SignalHistoryChart } from './SignalHistoryChart';
 
 export function ClientHistoryDialog({
 	clientMac,
 	clientName,
-	presenceEnabled
+	presenceEnabled,
+	children
 }: {
 	clientMac: string;
 	clientName: string;
 	presenceEnabled?: boolean;
+	children: React.ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
-			<DialogTrigger asChild>
-				<Button variant="outline" size="sm">
-					<ChartAreaIcon className="h-4 w-4" />
-				</Button>
-			</DialogTrigger>
+			<DialogTrigger asChild>{children}</DialogTrigger>
 			<DialogContent className="w-full max-w-[95vw] sm:max-w-2xl md:max-w-3xl">
 				<DialogHeader>
 					<DialogTitle>{clientName || clientMac} — History</DialogTitle>

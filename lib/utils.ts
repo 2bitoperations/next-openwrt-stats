@@ -67,6 +67,15 @@ export function formatBitrate(bytesPerSecond: number) {
 	return `${(bitsPerSecond / 1_000_000_000).toFixed(2)} Gbps`;
 }
 
+export function wifiGenerationLabel(htmode: string | undefined, band?: string) {
+	if (!htmode) return undefined;
+	if (htmode.startsWith('EHT')) return '7';
+	if (htmode.startsWith('HE')) return band === '6g' ? '6E' : '6';
+	if (htmode.startsWith('VHT')) return '5';
+	if (htmode.startsWith('HT')) return '4';
+	return undefined;
+}
+
 export const formatBand = (band: string | string[]) => {
 	if (Array.isArray(band)) {
 		return `${band.map((b) => b.replaceAll('2g', '2.4').replaceAll('5g', '5').replaceAll('6g', '6')).join(' / ')} GHz`;

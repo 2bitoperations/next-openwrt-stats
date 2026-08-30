@@ -15,10 +15,12 @@ import { WifiClients, WifiClientsTraffic } from '@/lib/server/wifiAPs';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
 	calcMbps,
+	cn,
 	formatBand,
 	formatBytes,
 	ipToSortableNumber,
-	secondsToHumanReadable
+	secondsToHumanReadable,
+	wifiGenerationLabel
 } from '@/lib/utils';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -31,8 +33,6 @@ import {
 } from './ui/select';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
-import { SVGIcon } from './SVGIcons';
-import { PresenceHistoryDialog } from './ClientPresence';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
 import { Progress } from '@/components/ui/progress';
 import { ClientBandwidthSummary, ClientLatestRates } from '@/lib/server/metrics';
@@ -47,7 +47,31 @@ type WifiDataEntry = {
 	displayName: string;
 	ssid: string;
 	band: string;
+	htmode: string;
 };
+
+const BAND_ICON_COLOR: Record<string, string> = {
+	'2g': 'text-sky-400',
+	'5g': 'text-violet-400',
+	'6g': 'text-emerald-400'
+};
+
+function ClientIcon({ wifiData }: { wifiData: WifiDataEntry | undefined }) {
+	if (!wifiData) return <UserIcon className="h-7 w-7" />;
+	const generation = wifiGenerationLabel(wifiData.htmode, wifiData.band);
+	return (
+		<div className="relative inline-flex h-7 w-7 shrink-0 items-center justify-center">
+			<WifiIcon
+				className={cn('h-6 w-6', BAND_ICON_COLOR[wifiData.band] || 'text-white')}
+			/>
+			{generation && (
+				<span className="bg-background text-muted-foreground ring-border absolute -bottom-1 -right-1.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[9px] font-bold leading-none ring-1">
+					{generation}
+				</span>
+			)}
+		</div>
+	);
+}
 
 type Rate = { rxMbps: number; txMbps: number };
 
@@ -107,14 +131,22 @@ export default function ClientCards({
 	});
 
 	const wifiAPsIfname = useMemo(() => {
-		const ifnames: { [displayName: string]: { ifname: string; ssid: string; band: string }[] } = {};
+		const ifnames: {
+			[displayName: string]: {
+				ifname: string;
+				ssid: string;
+				band: string;
+				htmode: string;
+			}[];
+		} = {};
 		for (const radio of radiosQuery.data || []) {
 			if (radio.mode === 'mesh' || !radio.ssid) continue;
 			if (!ifnames[radio.displayName]) ifnames[radio.displayName] = [];
 			ifnames[radio.displayName].push({
 				ifname: radio.ifname,
 				ssid: radio.ssid,
-				band: radio.band
+				band: radio.band,
+				htmode: radio.htmode
 			});
 		}
 		return ifnames;
@@ -439,96 +471,20 @@ function ClientCard({
 					)}
 				</span>
 				<div className="flex items-center overflow-hidden">
-					<div>
-						{!wifiData ? (
-							<UserIcon />
-						) : wifiData.band === '2g' ? (
-							<SVGIcon iconName="wifi4" className="h-7 w-7 pb-1" />
-						) : wifiData.band === '5g' ? (
-							<SVGIcon iconName="wifi5" className="h-7 w-7 pb-1" />
-						) : wifiData.band === '6g' ? (
-							<SVGIcon iconName="wifi6" className="h-7 w-7 pb-1" />
-						) : (
-							<WifiIcon className="h-8 w-8" />
-						)}
-					</div>
+					<ClientIcon wifiData={wifiData} />
 					<h3 className="mx-2 overflow-hidden text-ellipsis whitespace-nowrap text-lg font-semibold">
 						{device.deviceName || 'Unknown Device'}
 					</h3>
-					<div className="ml-auto flex items-center gap-2">
-						<ClientHistoryDialog
-							clientMac={device.macAddress}
-							clientName={device.deviceName}
-							presenceEnabled={presenceEnabled}
-						/>
-						{presenceEnabled && (
-							<PresenceHistoryDialog
-								clientMac={device.macAddress}
-								clientName={device.deviceName}
-							/>
-						)}
-						{wifiData && (
-							<Popover>
-								<PopoverTrigger asChild>
-									<Button className="gap-1.5" variant="outline" size="sm">
-										<RouterIcon className="h-4 w-4" />
-										<span className="text-muted-foreground text-sm">
-											{wifiData.displayName}
-										</span>
-									</Button>
-								</PopoverTrigger>
-								<PopoverContent className="w-80" align="end">
-									<div className="space-y-2">
-										<h4 className="mb-2 font-medium">
-											WiFi Connection Details
-										</h4>
-										<div className="space-y-1">
-											<p className="mt-2 flex justify-between text-sm">
-												<span className="text-muted-foreground">Router:</span>
-												<span>{wifiData.displayName}</span>
-											</p>
-											<p className="flex justify-between text-sm">
-												<span className="text-muted-foreground">SSID:</span>
-												<span>{wifiData.ssid}</span>
-											</p>
-											<p className="flex justify-between text-sm">
-												<span className="text-muted-foreground">Band:</span>
-												<span>{formatBand(wifiData.band)}</span>
-											</p>
-											<p className="flex justify-between text-sm">
-												<span className="text-muted-foreground">
-													Signal Strength:
-												</span>
-												<span>{wifiData.signal} dBm</span>
-											</p>
-											<p className="flex justify-between text-sm">
-												<span className="text-muted-foreground">
-													Noise Level:
-												</span>
-												<span>{wifiData.noise || 0} dBm</span>
-											</p>
-											<p className="flex justify-between text-sm">
-												<span className="text-muted-foreground">
-													Connected Time:
-												</span>
-												<span>
-													{wifiData.connected_time
-														? secondsToHumanReadable(wifiData.connected_time)
-														: '- - - -'}
-												</span>
-											</p>
-										</div>
-									</div>
-								</PopoverContent>
-							</Popover>
-						)}
-					</div>
 				</div>
 			</CardHeader>
 			<CardContent>
 				<div className="space-y-2 text-sm">
-					{(wifiData || rate) && (
-						<div className="space-y-1.5 pb-1">
+					<ClientHistoryDialog
+						clientMac={device.macAddress}
+						clientName={device.deviceName}
+						presenceEnabled={presenceEnabled}
+					>
+						<div className="-m-1 cursor-pointer space-y-1.5 rounded-md p-1 pb-1 transition-colors hover:bg-white/5">
 							<div className="flex items-center gap-2">
 								<span className="text-muted-foreground w-14 text-xs">
 									Down
@@ -546,7 +502,7 @@ function ClientCard({
 								/>
 							</div>
 						</div>
-					)}
+					</ClientHistoryDialog>
 					<p className="flex justify-between">
 						<span className="text-muted-foreground">IP Address:</span>
 						<span>{device.ipAddress}</span>
@@ -568,6 +524,63 @@ function ClientCard({
 							)}
 						</span>
 					</p>
+					{wifiData && (
+						<Popover>
+							<PopoverTrigger asChild>
+								<button
+									type="button"
+									className="hover:text-foreground -mx-1 flex w-[calc(100%+0.5rem)] items-center justify-between rounded-sm px-1 text-left"
+								>
+									<span className="text-muted-foreground">Router:</span>
+									<span className="flex items-center gap-1.5">
+										{wifiData.displayName}
+										<RouterIcon className="h-3.5 w-3.5" />
+									</span>
+								</button>
+							</PopoverTrigger>
+							<PopoverContent className="w-80" align="end">
+								<div className="space-y-2">
+									<h4 className="mb-2 font-medium">WiFi Connection Details</h4>
+									<div className="space-y-1">
+										<p className="mt-2 flex justify-between text-sm">
+											<span className="text-muted-foreground">Router:</span>
+											<span>{wifiData.displayName}</span>
+										</p>
+										<p className="flex justify-between text-sm">
+											<span className="text-muted-foreground">SSID:</span>
+											<span>{wifiData.ssid}</span>
+										</p>
+										<p className="flex justify-between text-sm">
+											<span className="text-muted-foreground">Band:</span>
+											<span>{formatBand(wifiData.band)}</span>
+										</p>
+										<p className="flex justify-between text-sm">
+											<span className="text-muted-foreground">
+												Signal Strength:
+											</span>
+											<span>{wifiData.signal} dBm</span>
+										</p>
+										<p className="flex justify-between text-sm">
+											<span className="text-muted-foreground">
+												Noise Level:
+											</span>
+											<span>{wifiData.noise || 0} dBm</span>
+										</p>
+										<p className="flex justify-between text-sm">
+											<span className="text-muted-foreground">
+												Connected Time:
+											</span>
+											<span>
+												{wifiData.connected_time
+													? secondsToHumanReadable(wifiData.connected_time)
+													: '- - - -'}
+											</span>
+										</p>
+									</div>
+								</div>
+							</PopoverContent>
+						</Popover>
+					)}
 					<p className="flex justify-between">
 						<span className="text-muted-foreground">Lease Time:</span>
 						<span>
