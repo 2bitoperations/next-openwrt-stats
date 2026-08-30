@@ -364,6 +364,7 @@ export async function getWifiClients(ifnames: {
 		ssid: string;
 		band: string;
 		htmode: string;
+		channel: number;
 	}[];
 }) {
 	if (!ifnames) {
@@ -378,6 +379,7 @@ export async function getWifiClients(ifnames: {
 			ssid: string;
 			band: string;
 			htmode: string;
+			channel: number;
 			mac: string;
 			rx: {
 				packets: number;
@@ -438,6 +440,7 @@ export async function getWifiClients(ifnames: {
 							ssid: ifname.ssid,
 							band: ifname.band,
 							htmode: ifname.htmode,
+							channel: ifname.channel,
 							mac: client.mac.toUpperCase()
 						};
 					}
@@ -456,6 +459,7 @@ export async function getWifiClients(ifnames: {
 							ssid: ifname.ssid,
 							band: ifname.band,
 							htmode: ifname.htmode,
+							channel: ifname.channel,
 							mac: key.toUpperCase(),
 							rx: {
 								packets: client.packets?.rx || 0,

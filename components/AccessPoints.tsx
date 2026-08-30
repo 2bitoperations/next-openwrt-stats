@@ -4,19 +4,14 @@ import { Card, CardContent, CardHeader } from './ui/card';
 import { Badge } from '@/components/ui/badge';
 import { LoaderCircle, RouterIcon } from 'lucide-react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
-import { formatBand, secondsToHumanReadable } from '@/lib/utils';
+import { formatBand, secondsToHumanReadable, wifiGenerationFullLabel } from '@/lib/utils';
 import { getRouterInfo } from '@/app/api/routers/info/route';
 import { WifiRadio } from '@/lib/server/wifiAPs';
 import { RadioHistoryDialog } from './RadioHistoryDialog';
 
 function radioModeLabel(radio: WifiRadio) {
 	if (radio.mode === 'mesh') return 'Mesh';
-	const htmode = radio.htmode || '';
-	if (htmode.startsWith('EHT')) return 'Wi-Fi 7 (be)';
-	if (htmode.startsWith('HE')) return 'Wi-Fi 6/6E (ax)';
-	if (htmode.startsWith('VHT')) return 'Wi-Fi 5 (ac)';
-	if (htmode.startsWith('HT')) return 'Wi-Fi 4 (n)';
-	return htmode || 'Unknown';
+	return wifiGenerationFullLabel(radio.htmode);
 }
 
 function useRadiosQuery() {

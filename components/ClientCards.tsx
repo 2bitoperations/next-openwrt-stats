@@ -34,6 +34,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
+import { ClientProtocolHoverCard } from './ClientProtocolHoverCard';
 import { Progress } from '@/components/ui/progress';
 import { ClientBandwidthSummary, ClientLatestRates } from '@/lib/server/metrics';
 import { WifiRadio } from '@/lib/server/wifiAPs';
@@ -48,6 +49,7 @@ type WifiDataEntry = {
 	ssid: string;
 	band: string;
 	htmode: string;
+	channel: number;
 };
 
 const BAND_ICON_COLOR: Record<string, string> = {
@@ -137,6 +139,7 @@ export default function ClientCards({
 				ssid: string;
 				band: string;
 				htmode: string;
+				channel: number;
 			}[];
 		} = {};
 		for (const radio of radiosQuery.data || []) {
@@ -146,11 +149,25 @@ export default function ClientCards({
 				ifname: radio.ifname,
 				ssid: radio.ssid,
 				band: radio.band,
-				htmode: radio.htmode
+				htmode: radio.htmode,
+				channel: radio.channel
 			});
 		}
 		return ifnames;
 	}, [radiosQuery.data]);
+
+	// Lets the protocol hover card label *historical* presence segments (which
+	// only record router+band, not htmode) with a Wi-Fi generation, on the
+	// assumption a given router+band's radio config is roughly stable over time.
+	const htmodeByRouterBand = useMemo(() => {
+		const map = new Map<string, string>();
+		for (const [displayName, radios] of Object.entries(wifiAPsIfname)) {
+			for (const radio of radios) {
+				map.set(`${displayName}|${radio.band}`, radio.htmode);
+			}
+		}
+		return map;
+	}, [wifiAPsIfname]);
 
 	const wifiClientsQuery = useQuery({
 		queryKey: ['wifiClients'],
@@ -434,6 +451,7 @@ export default function ClientCards({
 						wifiData={wifiClientsQuery.data?.[device.macAddress.toUpperCase()]}
 						rate={rates.get(device.macAddress.toUpperCase())}
 						presenceEnabled={presenceEnabled}
+						htmodeByRouterBand={htmodeByRouterBand}
 					/>
 				))}
 			</div>
@@ -445,7 +463,8 @@ function ClientCard({
 	device,
 	wifiData,
 	rate,
-	presenceEnabled
+	presenceEnabled,
+	htmodeByRouterBand
 }: {
 	device: {
 		deviceName: string;
@@ -456,6 +475,7 @@ function ClientCard({
 	rate: Rate | undefined;
 	wifiData: WifiDataEntry | undefined;
 	presenceEnabled: boolean;
+	htmodeByRouterBand: Map<string, string>;
 }) {
 	return (
 		<Card className="w-full gap-2">
@@ -471,7 +491,18 @@ function ClientCard({
 					)}
 				</span>
 				<div className="flex items-center overflow-hidden">
-					<ClientIcon wifiData={wifiData} />
+					{wifiData ? (
+						<ClientProtocolHoverCard
+							clientMac={device.macAddress}
+							wifiData={wifiData}
+							presenceEnabled={presenceEnabled}
+							htmodeByRouterBand={htmodeByRouterBand}
+						>
+							<ClientIcon wifiData={wifiData} />
+						</ClientProtocolHoverCard>
+					) : (
+						<ClientIcon wifiData={wifiData} />
+					)}
 					<h3 className="mx-2 overflow-hidden text-ellipsis whitespace-nowrap text-lg font-semibold">
 						{device.deviceName || 'Unknown Device'}
 					</h3>

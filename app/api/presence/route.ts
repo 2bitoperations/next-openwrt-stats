@@ -177,6 +177,7 @@ async function getIfnames() {
 				ssid: string;
 				band: string;
 				htmode: string;
+				channel: number;
 			}[];
 		} = {};
 
@@ -231,6 +232,7 @@ async function getIfnames() {
 							ssid: wifiInterface.iwinfo.ssid,
 							band: wifiData.config.band,
 							htmode: wifiData.config.htmode,
+							channel: wifiInterface.iwinfo.channel || 0,
 							ifname: wifiInterface.ifname
 						});
 					}

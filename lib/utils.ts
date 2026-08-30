@@ -76,6 +76,15 @@ export function wifiGenerationLabel(htmode: string | undefined, band?: string) {
 	return undefined;
 }
 
+export function wifiGenerationFullLabel(htmode: string | undefined) {
+	if (!htmode) return 'Unknown';
+	if (htmode.startsWith('EHT')) return 'Wi-Fi 7 (be)';
+	if (htmode.startsWith('HE')) return 'Wi-Fi 6/6E (ax)';
+	if (htmode.startsWith('VHT')) return 'Wi-Fi 5 (ac)';
+	if (htmode.startsWith('HT')) return 'Wi-Fi 4 (n)';
+	return htmode || 'Unknown';
+}
+
 export const formatBand = (band: string | string[]) => {
 	if (Array.isArray(band)) {
 		return `${band.map((b) => b.replaceAll('2g', '2.4').replaceAll('5g', '5').replaceAll('6g', '6')).join(' / ')} GHz`;
