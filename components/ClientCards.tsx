@@ -35,7 +35,7 @@ import { SVGIcon } from './SVGIcons';
 import { PresenceHistoryDialog } from './ClientPresence';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
 import { Progress } from '@/components/ui/progress';
-import { ClientBandwidthSummary } from '@/lib/server/metrics';
+import { ClientBandwidthSummary, ClientLatestRates } from '@/lib/server/metrics';
 import { WifiRadio } from '@/lib/server/wifiAPs';
 
 type WifiDataEntry = {
@@ -175,11 +175,40 @@ export default function ClientCards({
 		refetchInterval: 30_000
 	});
 
+	// Wired (and any other non-wifi) clients only get a new number once per
+	// collector tick (~5s) - there's no sub-5s "live" data for them even in
+	// principle, so this polls the most recent collected sample instead of
+	// computing a delta client-side the way the true-live wifi poll does.
+	const clientLatestRatesQuery = useQuery({
+		queryKey: ['clientLatestRates'],
+		queryFn: async () => {
+			const res = await fetch('/api/metrics/client-latest-rates');
+			const data = (await res.json()) as ClientLatestRates;
+			if (!data.success) throw new Error(data.errorMessage);
+			return data.data;
+		},
+		refetchInterval: 5000
+	});
+
 	// Rates are computed here (not per-card) so the list can sort by bandwidth.
 	const prevTrafficRef = useRef<
 		Map<string, { rxBytes: number; txBytes: number; time: number }>
 	>(new Map());
-	const [rates, setRates] = useState<Map<string, Rate>>(new Map());
+	const [wifiRates, setWifiRates] = useState<Map<string, Rate>>(new Map());
+
+	const rates = useMemo(() => {
+		const merged = new Map<string, Rate>(wifiRates);
+		if (clientLatestRatesQuery.data) {
+			for (const [mac, data] of Object.entries(clientLatestRatesQuery.data)) {
+				if (merged.has(mac)) continue; // true-live wifi rate wins if present
+				merged.set(mac, {
+					rxMbps: (data.rxAvg * 8) / 1_000_000,
+					txMbps: (data.txAvg * 8) / 1_000_000
+				});
+			}
+		}
+		return merged;
+	}, [wifiRates, clientLatestRatesQuery.data]);
 
 	useEffect(() => {
 		if (!wifiClientsTrafficQuery.data) return;
@@ -196,7 +225,7 @@ export default function ClientCards({
 			}
 			prevMap.set(mac, data);
 		});
-		setRates(newRates);
+		setWifiRates(newRates);
 	}, [wifiClientsTrafficQuery.data]);
 
 	const filteredSortedDevices = useMemo(() => {
@@ -400,7 +429,7 @@ function ClientCard({
 		<Card className="w-full gap-2">
 			<CardHeader className="relative pb-2 pt-1">
 				<span className="absolute -top-5 right-7 text-[13.2px] font-medium text-white/70">
-					{wifiData && (rate?.rxMbps || rate?.txMbps) ? (
+					{rate?.rxMbps || rate?.txMbps ? (
 						<>
 							↓ {rate?.rxMbps.toFixed(2) || '0.00'} / ↑{' '}
 							{rate?.txMbps.toFixed(2) || '0.00'} Mbps
@@ -498,7 +527,7 @@ function ClientCard({
 			</CardHeader>
 			<CardContent>
 				<div className="space-y-2 text-sm">
-					{wifiData && (
+					{(wifiData || rate) && (
 						<div className="space-y-1.5 pb-1">
 							<div className="flex items-center gap-2">
 								<span className="text-muted-foreground w-14 text-xs">

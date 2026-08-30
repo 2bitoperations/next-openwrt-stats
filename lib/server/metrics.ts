@@ -11,7 +11,7 @@ import {
 import { and, avg, eq, gte, inArray, lte, max, min, sql } from 'drizzle-orm';
 import { getRoutersWithId } from './router';
 import { getNetworkDeviceStats } from './routerInterfaces';
-import { getWifiClientsTraffic, getWifiRadios } from './wifiAPs';
+import { getNlbwHostTotals, getWifiClientsTraffic, getWifiRadios } from './wifiAPs';
 import { getDhcpDevices } from './dhcpDevices';
 import { ubusBatchCall } from './ubusCalls';
 import { routerInfoSchema } from '@/types/ubusCalls';
@@ -35,7 +35,16 @@ type DbClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 type RouterRow = { id: number; displayName: string; isPrimary: number };
 
-type CounterState = { rx: number; tx: number; time: number };
+// `source` guards against diffing across a basis change - e.g. a client
+// roaming from wifi (hostapd's frame-level counters) to wired (nlbwmon's
+// routed-traffic counters), which are on completely different scales and
+// would produce a garbage delta if diffed against each other.
+type CounterState = {
+	rx: number;
+	tx: number;
+	time: number;
+	source?: 'wifi' | 'nlbw';
+};
 const lastCounters = new Map<string, CounterState>();
 const seriesIdCache = new Map<string, number>();
 
@@ -210,56 +219,94 @@ async function computeClientAndRadioSampleRows(
 	routers: RouterRow[],
 	nowSec: number
 ): Promise<PendingRow[]> {
-	if (Object.keys(cachedIfnames).length === 0) return [];
-
-	const routerIdByName = new Map(routers.map((r) => [r.displayName, r.id]));
-	const traffic = await getWifiClientsTraffic(cachedIfnames);
-	if (!traffic.success) return [];
-
 	const rows: PendingRow[] = [];
+	const wifiMacs = new Set<string>();
 
-	for (const [mac, data] of Object.entries(traffic.data)) {
-		const key = seriesKey('client', null, mac);
-		const prev = lastCounters.get(key);
-		lastCounters.set(key, { rx: data.rxBytes, tx: data.txBytes, time: nowSec });
-		if (!prev) continue;
-		const dt = nowSec - prev.time;
-		const drx = data.rxBytes - prev.rx;
-		const dtx = data.txBytes - prev.tx;
-		if (dt <= 0 || drx < 0 || dtx < 0) continue;
-		rows.push(
-			await buildInterfaceRow(
-				'client',
-				null,
-				mac,
-				nowSec,
-				drx / dt,
-				dtx / dt,
-				data.signal
-			)
-		);
+	if (Object.keys(cachedIfnames).length > 0) {
+		const routerIdByName = new Map(routers.map((r) => [r.displayName, r.id]));
+		const traffic = await getWifiClientsTraffic(cachedIfnames);
+
+		if (traffic.success) {
+			for (const [mac, data] of Object.entries(traffic.data)) {
+				wifiMacs.add(mac);
+				const key = seriesKey('client', null, mac);
+				const prev = lastCounters.get(key);
+				lastCounters.set(key, {
+					rx: data.rxBytes,
+					tx: data.txBytes,
+					time: nowSec,
+					source: 'wifi'
+				});
+				if (!prev || prev.source !== 'wifi') continue;
+				const dt = nowSec - prev.time;
+				const drx = data.rxBytes - prev.rx;
+				const dtx = data.txBytes - prev.tx;
+				if (dt <= 0 || drx < 0 || dtx < 0) continue;
+				rows.push(
+					await buildInterfaceRow(
+						'client',
+						null,
+						mac,
+						nowSec,
+						drx / dt,
+						dtx / dt,
+						data.signal
+					)
+				);
+			}
+
+			for (const [displayName, radios] of Object.entries(traffic.perRadio)) {
+				const routerId = routerIdByName.get(displayName);
+				if (routerId === undefined) continue;
+				for (const [ifname, radioStats] of Object.entries(radios)) {
+					const signals = radioStats.signals;
+					const noises = radioStats.noises;
+					rows.push(
+						await buildRadioRow(
+							routerId,
+							ifname,
+							nowSec,
+							radioStats.clientCount,
+							signals.length
+								? signals.reduce((a, b) => a + b, 0) / signals.length
+								: null,
+							signals.length ? Math.min(...signals) : null,
+							noises.length
+								? noises.reduce((a, b) => a + b, 0) / noises.length
+								: null
+						)
+					);
+				}
+			}
+		}
 	}
 
-	for (const [displayName, radios] of Object.entries(traffic.perRadio)) {
-		const routerId = routerIdByName.get(displayName);
-		if (routerId === undefined) continue;
-		for (const [ifname, radioStats] of Object.entries(radios)) {
-			const signals = radioStats.signals;
-			const noises = radioStats.noises;
+	// Wired (and any other non-wifi) client traffic, via nlbwmon. Skip any
+	// MAC that already got a row from wifi data this tick - that traffic is
+	// already covered by hostapd's own counters, so using both would
+	// double-instrument the same number rather than add information.
+	const nlbwTotals = await getNlbwHostTotals();
+	if (nlbwTotals.success) {
+		for (const [mac, data] of Object.entries(nlbwTotals.data)) {
+			if (wifiMacs.has(mac)) continue;
+			const key = seriesKey('client', null, mac);
+			const prev = lastCounters.get(key);
+			lastCounters.set(key, {
+				rx: data.rxBytes,
+				tx: data.txBytes,
+				time: nowSec,
+				source: 'nlbw'
+			});
+			if (!prev || prev.source !== 'nlbw') continue;
+			const dt = nowSec - prev.time;
+			const drx = data.rxBytes - prev.rx;
+			const dtx = data.txBytes - prev.tx;
+			// A negative delta here means nlbwmon's monthly accounting period
+			// rolled over and its counters reset - same as an interface reboot,
+			// just skip this sample and pick back up next tick.
+			if (dt <= 0 || drx < 0 || dtx < 0) continue;
 			rows.push(
-				await buildRadioRow(
-					routerId,
-					ifname,
-					nowSec,
-					radioStats.clientCount,
-					signals.length
-						? signals.reduce((a, b) => a + b, 0) / signals.length
-						: null,
-					signals.length ? Math.min(...signals) : null,
-					noises.length
-						? noises.reduce((a, b) => a + b, 0) / noises.length
-						: null
-				)
+				await buildInterfaceRow('client', null, mac, nowSec, drx / dt, dtx / dt)
 			);
 		}
 	}
@@ -850,6 +897,56 @@ export async function getClientBandwidthSummary(windowSeconds: number) {
 		return {
 			success: false,
 			errorMessage: 'Failed to get client bandwidth summary'
+		} as const;
+	}
+}
+
+const LATEST_RATE_STALE_AFTER_SECONDS = 15;
+
+export type ClientLatestRates = Awaited<ReturnType<typeof getClientLatestRates>>;
+export async function getClientLatestRates() {
+	try {
+		// Bare, non-aggregated columns alongside a single max() aggregate is a
+		// documented SQLite extension: they're pulled from the row that
+		// supplied the max value, not an arbitrary row - this gets each
+		// series' most recent sample in one query instead of one per client.
+		const rows = await db
+			.select({
+				mac: metricSeriesTable.key,
+				rxAvg: metricSampleTable.rxAvg,
+				txAvg: metricSampleTable.txAvg,
+				timestamp: sql<number>`max(${metricSampleTable.timestamp})`
+			})
+			.from(metricSampleTable)
+			.innerJoin(
+				metricSeriesTable,
+				eq(metricSeriesTable.id, metricSampleTable.seriesId)
+			)
+			.where(
+				and(
+					eq(metricSeriesTable.scope, 'client'),
+					eq(metricSampleTable.tier, 'raw')
+				)
+			)
+			.groupBy(metricSampleTable.seriesId);
+
+		const now = Math.floor(Date.now() / 1000);
+		const rates: { [mac: string]: { rxAvg: number; txAvg: number } } = {};
+		for (const row of rows) {
+			// Don't surface a stale rate forever for a client that stopped
+			// reporting (went offline, or is a wifi client mid-roam).
+			if (now - row.timestamp > LATEST_RATE_STALE_AFTER_SECONDS) continue;
+			rates[row.mac] = {
+				rxAvg: Number(row.rxAvg) || 0,
+				txAvg: Number(row.txAvg) || 0
+			};
+		}
+		return { success: true, data: rates } as const;
+	} catch (error) {
+		logError({ errorMessage: 'Failed to get client latest rates', error });
+		return {
+			success: false,
+			errorMessage: 'Failed to get client latest rates'
 		} as const;
 	}
 }

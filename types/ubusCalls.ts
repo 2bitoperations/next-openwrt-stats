@@ -149,6 +149,19 @@ export const getRealTimeStatsSchema = z.object({
 	])
 });
 
+export const fileExecSchema = z.object({
+	jsonrpc: z.string(),
+	id: z.number(),
+	result: z.tuple([
+		z.literal(0),
+		z.object({
+			code: z.number(),
+			stdout: z.string().optional(),
+			stderr: z.string().optional()
+		})
+	])
+});
+
 export const dhcpDevicesSchema = z.object({
 	jsonrpc: z.string(),
 	id: z.number(),
