@@ -29,6 +29,11 @@ const SEGMENT_PALETTE = [
 	'#34d399'
 ];
 
+// Shared between the chart shading and the legend swatches so the legend
+// shows exactly what the chart shows, instead of a fully-solid color next
+// to a diffuse tinted region.
+const SEGMENT_FILL_OPACITY = 0.22;
+
 function timeTickFormat(timestamp: number, rangeSeconds: number) {
 	const date = new Date(timestamp * 1000);
 	if (rangeSeconds > 24 * 60 * 60) {
@@ -94,6 +99,13 @@ export function SignalHistoryChart({
 			signalMin: point.signalMin
 		}));
 
+	function getSegmentAt(timestamp: number) {
+		return (segmentsQuery.data || []).find(
+			(segment) =>
+				timestamp >= segment.startTimestamp && timestamp <= segment.endTimestamp
+		);
+	}
+
 	const segmentColors = useMemo(() => {
 		const colors = new Map<string, string>();
 		(segmentsQuery.data || []).forEach((segment) => {
@@ -139,7 +151,7 @@ export function SignalHistoryChart({
 								x1={segment.startTimestamp}
 								x2={segment.endTimestamp}
 								fill={segmentColors.get(`${segment.router}::${segment.band}`)}
-								fillOpacity={0.15}
+								fillOpacity={SEGMENT_FILL_OPACITY}
 								stroke="none"
 								ifOverflow="visible"
 							/>
@@ -157,14 +169,21 @@ export function SignalHistoryChart({
 							content={
 								<ChartTooltipContent
 									indicator="line"
-									labelFormatter={(_, payload) =>
-										payload?.[0]
-											? timeTickFormat(
-													Number(payload[0].payload.timestamp),
-													rangeSeconds
-												)
-											: ''
-									}
+									labelFormatter={(_, payload) => {
+										if (!payload?.[0]) return '';
+										const timestamp = Number(payload[0].payload.timestamp);
+										const segment = getSegmentAt(timestamp);
+										return (
+											<div className="flex flex-col gap-0.5">
+												<span>{timeTickFormat(timestamp, rangeSeconds)}</span>
+												{segment && (
+													<span className="text-muted-foreground text-xs font-normal">
+														{segment.router} ({formatBand(segment.band)})
+													</span>
+												)}
+											</div>
+										);
+									}}
 									formatter={(value, name) => (
 										<div className="flex w-full justify-between gap-4">
 											<span className="text-muted-foreground">
@@ -202,10 +221,12 @@ export function SignalHistoryChart({
 						const [router, band] = key.split('::');
 						return (
 							<span key={key} className="flex items-center gap-1.5">
-								<span
-									className="inline-block h-2 w-2 rounded-sm"
-									style={{ background: color }}
-								/>
+								<span className="relative inline-block h-2.5 w-2.5 overflow-hidden rounded-sm bg-black">
+									<span
+										className="absolute inset-0"
+										style={{ backgroundColor: color, opacity: SEGMENT_FILL_OPACITY }}
+									/>
+								</span>
 								{router} ({formatBand(band)})
 							</span>
 						);

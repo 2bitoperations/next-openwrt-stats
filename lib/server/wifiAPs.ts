@@ -234,6 +234,128 @@ export async function getWifiAPs() {
 	} as const;
 }
 
+export type WifiRadio = {
+	displayName: string;
+	ifname: string;
+	parentConfigSection: string;
+	configSection: string;
+	mode: string; // 'ap' | 'mesh' (whatever OpenWrt reports)
+	band: string;
+	htmode: string;
+	channel: number;
+	txpower: number;
+	bitrate: number;
+	disabled: boolean;
+	ssid?: string;
+	meshId?: string;
+};
+
+// Like getWifiAPs, but includes every wifi-iface (AP *and* mesh), since mesh
+// links have no ssid and getWifiAPs skips them entirely. Used for the Access
+// Points UI and for the collector's per-router radio snapshot.
+export type WifiRadios = Awaited<ReturnType<typeof getWifiRadios>>;
+export async function getWifiRadios() {
+	const allRouters = await getRouters();
+	if (!allRouters.success) {
+		return allRouters;
+	}
+
+	const radios: WifiRadio[] = [];
+
+	await Promise.all(
+		allRouters.data.map(async (router) => {
+			const wifiData = await ubusBatchCall({
+				displayName: router.displayName,
+				calls: [
+					{
+						id: 1,
+						params: ['uci', 'get', { config: 'wireless' }]
+					},
+					{
+						id: 2,
+						params: ['luci-rpc', 'getWirelessDevices', {}]
+					}
+				]
+			});
+			if (!wifiData.success) {
+				logError({
+					displayName: router.displayName,
+					errorMessage: 'Failed to get wifi radio data',
+					...wifiData
+				});
+				return;
+			}
+			const wirelessConfig = wifiConfigSchema.safeParse(
+				wifiData.data.find((response) => response.id === 1)
+			);
+			const wifiAPsLiveData = wifiAPsLiveDataSchema.safeParse(
+				wifiData.data.find((response) => response.id === 2)
+			);
+			if (!wirelessConfig.success || !wifiAPsLiveData.success) {
+				!wirelessConfig.success &&
+					logError({
+						displayName: router.displayName,
+						errorMessage: 'Failed to parse wireless config for radios',
+						zodError: wirelessConfig.error,
+						...wifiData
+					});
+				!wifiAPsLiveData.success &&
+					logError({
+						displayName: router.displayName,
+						errorMessage: 'Failed to parse wifi live data for radios',
+						zodError: wifiAPsLiveData.error,
+						...wifiData
+					});
+				return;
+			}
+			const allWifiConfigs = Object.values(
+				wirelessConfig.data.result[1].values
+			);
+			for (const wifiConfig of allWifiConfigs) {
+				if (wifiConfig['.type'] !== 'wifi-iface') {
+					continue;
+				}
+				const wifiConfigParent = allWifiConfigs.find(
+					(config) => wifiConfig.device === config['.name']
+				);
+				if (!wifiConfigParent || wifiConfigParent['.type'] !== 'wifi-device') {
+					continue;
+				}
+				const wifiAPLiveData = wifiAPsLiveData.data.result[1][
+					wifiConfig.device
+				]?.interfaces?.find((iface) => iface.section === wifiConfig['.name']);
+				radios.push({
+					displayName: router.displayName,
+					ifname: wifiAPLiveData?.ifname || wifiConfig.device,
+					parentConfigSection: wifiConfig.device,
+					configSection: wifiConfig['.name'],
+					mode: wifiConfig.mode || 'ap',
+					band: wifiConfigParent.band,
+					htmode: wifiConfigParent.htmode,
+					channel:
+						wifiAPLiveData?.iwinfo?.channel ||
+						Number(wifiConfigParent.channel) ||
+						0,
+					txpower:
+						wifiAPLiveData?.iwinfo?.txpower ||
+						Number(wifiConfigParent.txpower) ||
+						0,
+					bitrate: wifiAPLiveData?.iwinfo?.bitrate || 0,
+					disabled:
+						wifiConfigParent.disabled === '1' || wifiConfig.disabled === '1',
+					ssid: wifiConfig.ssid,
+					meshId: wifiConfig.mesh_id
+				});
+			}
+		})
+	);
+
+	return {
+		success: true,
+		data: radios
+	} as const;
+}
+
 export type WifiClients = Awaited<ReturnType<typeof getWifiClients>>;
 export async function getWifiClients(ifnames: {
 	[key: string]: {
@@ -378,10 +500,20 @@ export async function getWifiClientsTraffic(ifnames: {
 				time: number;
 			};
 		} = {};
+		const perRadio: {
+			[router: string]: {
+				[ifname: string]: {
+					clientCount: number;
+					signals: number[];
+					noises: number[];
+				};
+			};
+		} = {};
 
 		await Promise.all(
 			Object.keys(ifnames).map(async (router) => {
 				const allifname = ifnames[router];
+				perRadio[router] = {};
 				for (const ifname of allifname) {
 					const ubusResponse = await ubusBatchCall({
 						displayName: router,
@@ -424,6 +556,11 @@ export async function getWifiClientsTraffic(ifnames: {
 					}
 					if (parsedClientsResponse.success) {
 						const wifiClients = parsedClientsResponse.data.result[1].results;
+						perRadio[router][ifname.ifname] = {
+							clientCount: wifiClients.length,
+							signals: wifiClients.map((client) => client.signal),
+							noises: wifiClients.map((client) => client.noise)
+						};
 						for (const client of wifiClients) {
 							if (
 								trafficStats[client.mac.toUpperCase()] &&
@@ -445,6 +582,18 @@ export async function getWifiClientsTraffic(ifnames: {
 					}
 
 					if (parsedHostapdResponse.success) {
+						const hostapdClients = Object.values(
+							parsedHostapdResponse.data.result[1].clients
+						);
+						if (!perRadio[router][ifname.ifname]) {
+							perRadio[router][ifname.ifname] = {
+								clientCount: hostapdClients.length,
+								signals: hostapdClients
+									.map((client) => client.signal)
+									.filter((signal): signal is number => signal !== undefined),
+								noises: []
+							};
+						}
 						for (const key of Object.keys(
 							parsedHostapdResponse.data.result[1].clients
 						)) {
@@ -473,7 +622,8 @@ export async function getWifiClientsTraffic(ifnames: {
 
 		return {
 			success: true,
-			data: trafficStats
+			data: trafficStats,
+			perRadio
 		} as const;
 	} catch (error) {
 		console.error(error);

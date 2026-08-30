@@ -1,16 +1,46 @@
 'use client';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader } from './ui/card';
 import { Badge } from '@/components/ui/badge';
 import { LoaderCircle, RouterIcon } from 'lucide-react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
-import { useWifiAPsQuery } from '@/providers/wifiAPsContext';
 import { formatBand, secondsToHumanReadable } from '@/lib/utils';
 import { getRouterInfo } from '@/app/api/routers/info/route';
+import { WifiRadio } from '@/lib/server/wifiAPs';
+import { RadioHistoryDialog } from './RadioHistoryDialog';
+
+function radioModeLabel(radio: WifiRadio) {
+	if (radio.mode === 'mesh') return 'Mesh';
+	const htmode = radio.htmode || '';
+	if (htmode.startsWith('EHT')) return 'Wi-Fi 7 (be)';
+	if (htmode.startsWith('HE')) return 'Wi-Fi 6/6E (ax)';
+	if (htmode.startsWith('VHT')) return 'Wi-Fi 5 (ac)';
+	if (htmode.startsWith('HT')) return 'Wi-Fi 4 (n)';
+	return htmode || 'Unknown';
+}
+
+function useRadiosQuery() {
+	return useQuery({
+		queryKey: ['radios'],
+		queryFn: async () => {
+			const res = await fetch('/api/radios');
+			const data = (await res.json()) as {
+				success: boolean;
+				data?: WifiRadio[];
+				errorMessage?: string;
+			};
+			if (!data.success || !data.data) {
+				throw new Error(data.errorMessage || 'Failed to load radios');
+			}
+			return data.data;
+		},
+		refetchInterval: 30_000
+	});
+}
 
 export function AccessPoints() {
 	const { allRouters } = useActiveRouter();
-	const wifiAPs = useWifiAPsQuery();
+	const radiosQuery = useRadiosQuery();
 
 	const routerInfoQueries = useQueries({
 		queries: (allRouters || []).map((router) => ({
@@ -30,7 +60,7 @@ export function AccessPoints() {
 		return null;
 	}
 
-	if (wifiAPs.isLoading) {
+	if (radiosQuery.isLoading) {
 		return (
 			<div className="grid h-32 w-full place-items-center">
 				<LoaderCircle className="h-8 w-8 animate-spin" />
@@ -38,35 +68,19 @@ export function AccessPoints() {
 		);
 	}
 
-	const wifiInterfacesByRouter: {
-		[displayName: string]: {
-			ssid: string;
-			band: string;
-			channel: number;
-			htmode: string;
-			txpower: number;
-			bitrate?: number;
-			disabled?: boolean;
-		}[];
-	} = {};
-	if (wifiAPs.data) {
-		Object.entries(wifiAPs.data.wifiAPsPerSSID).forEach(([ssid, entries]) => {
-			entries.forEach((entry) => {
-				if (!wifiInterfacesByRouter[entry.displayName]) {
-					wifiInterfacesByRouter[entry.displayName] = [];
-				}
-				wifiInterfacesByRouter[entry.displayName].push({ ...entry, ssid });
-			});
-		});
+	const radiosByRouter: { [displayName: string]: WifiRadio[] } = {};
+	for (const radio of radiosQuery.data || []) {
+		if (!radiosByRouter[radio.displayName]) radiosByRouter[radio.displayName] = [];
+		radiosByRouter[radio.displayName].push(radio);
 	}
 
 	return (
 		<div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
 			{allRouters.map((router, i) => {
 				const info = routerInfoQueries[i];
-				const interfaces = (
-					wifiInterfacesByRouter[router.displayName] || []
-				).sort((a, b) => a.band.localeCompare(b.band));
+				const radios = (radiosByRouter[router.displayName] || []).sort((a, b) =>
+					a.band.localeCompare(b.band)
+				);
 
 				return (
 					<Card key={router.displayName} className="w-full gap-4">
@@ -99,32 +113,42 @@ export function AccessPoints() {
 											: secondsToHumanReadable(info.data.uptime)}
 									</span>
 								</p>
-								{interfaces.length === 0 ? (
+								{radios.length === 0 ? (
 									<p className="text-muted-foreground text-xs">
 										No wireless interfaces
 									</p>
 								) : (
-									<div className="space-y-2 border-t pt-2">
-										{interfaces.map((iface, idx) => (
-											<div
-												key={`${iface.ssid}-${iface.band}-${idx}`}
-												className="flex items-center justify-between gap-2 text-xs"
+									<div className="space-y-1 border-t pt-2">
+										{radios.map((radio, idx) => (
+											<RadioHistoryDialog
+												key={`${radio.ifname}-${idx}`}
+												radio={radio}
 											>
-												<div className="flex items-center gap-1.5 truncate">
-													<Badge variant="outline" className="shrink-0 text-xs">
-														{formatBand(iface.band)}
-													</Badge>
-													<span className="truncate">{iface.ssid}</span>
-													{iface.disabled && (
-														<Badge variant="destructive" className="shrink-0 text-xs">
-															Off
+												<button className="hover:bg-muted flex w-full items-center justify-between gap-2 rounded-md px-1 py-1.5 text-left text-xs">
+													<div className="flex min-w-0 items-center gap-1.5">
+														<Badge variant="outline" className="shrink-0 text-xs">
+															{formatBand(radio.band)}
 														</Badge>
-													)}
-												</div>
-												<span className="text-muted-foreground shrink-0">
-													ch {iface.channel || '?'} · {iface.txpower || '?'} dBm
-												</span>
-											</div>
+														<Badge
+															variant={radio.mode === 'mesh' ? 'default' : 'secondary'}
+															className="shrink-0 text-xs"
+														>
+															{radioModeLabel(radio)}
+														</Badge>
+														<span className="truncate">
+															{radio.ssid || radio.meshId}
+														</span>
+														{radio.disabled && (
+															<Badge variant="destructive" className="shrink-0 text-xs">
+																Off
+															</Badge>
+														)}
+													</div>
+													<span className="text-muted-foreground shrink-0">
+														ch {radio.channel || '?'} · {radio.txpower || '?'} dBm
+													</span>
+												</button>
+											</RadioHistoryDialog>
 										))}
 									</div>
 								)}

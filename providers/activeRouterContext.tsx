@@ -55,8 +55,13 @@ export function ActiveRouterProvider({ children }: { children: ReactNode }) {
 		if (savedRouter && savedRouterIsValid) {
 			setActiveRouterState(savedRouter);
 		} else {
-			setActiveRouterState(allRoutersQuery.data[0].displayName);
-			localStorage.setItem('activeRouter', allRoutersQuery.data[0].displayName);
+			// No usable saved choice (first load, or the saved router is gone) -
+			// there's no picker for this anymore, so default to the primary router.
+			const defaultRouter =
+				allRoutersQuery.data.find((router) => router.isPrimary === 1) ||
+				allRoutersQuery.data[0];
+			setActiveRouterState(defaultRouter.displayName);
+			localStorage.setItem('activeRouter', defaultRouter.displayName);
 		}
 	}, [allRoutersQuery.dataUpdatedAt]);
 

@@ -30,12 +30,13 @@ import {
 	SelectValue
 } from './ui/select';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useWifiAPsQuery } from '@/providers/wifiAPsContext';
 import { useActiveRouter } from '@/providers/activeRouterContext';
 import { SVGIcon } from './SVGIcons';
 import { PresenceHistoryDialog } from './ClientPresence';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
 import { Progress } from '@/components/ui/progress';
+import { ClientBandwidthSummary } from '@/lib/server/metrics';
+import { WifiRadio } from '@/lib/server/wifiAPs';
 
 type WifiDataEntry = {
 	signal: number;
@@ -50,7 +51,13 @@ type WifiDataEntry = {
 
 type Rate = { rxMbps: number; txMbps: number };
 
-type SortKey = 'name' | 'ip' | 'signal' | 'bandwidth';
+type SortKey = 'name' | 'ip' | 'signal' | 'bandwidth1h' | 'bandwidth1d' | 'bandwidth1mo';
+
+const BANDWIDTH_WINDOW_SECONDS: Partial<Record<SortKey, number>> = {
+	bandwidth1h: 60 * 60,
+	bandwidth1d: 24 * 60 * 60,
+	bandwidth1mo: 30 * 24 * 60 * 60
+};
 
 export default function ClientCards({
 	presenceEnabled
@@ -80,19 +87,48 @@ export default function ClientCards({
 		retry: 1
 	});
 
-	const wifiAPs = useWifiAPsQuery();
+	// Sourced from the cached radio snapshot (fast, no live ubus round-trip)
+	// rather than calling getWifiAPs() live on every load.
+	const radiosQuery = useQuery({
+		queryKey: ['radios'],
+		queryFn: async () => {
+			const res = await fetch('/api/radios');
+			const data = (await res.json()) as {
+				success: boolean;
+				data?: WifiRadio[];
+				errorMessage?: string;
+			};
+			if (!data.success || !data.data) {
+				throw new Error(data.errorMessage || 'Failed to load radios');
+			}
+			return data.data;
+		},
+		refetchInterval: 30_000
+	});
+
+	const wifiAPsIfname = useMemo(() => {
+		const ifnames: { [displayName: string]: { ifname: string; ssid: string; band: string }[] } = {};
+		for (const radio of radiosQuery.data || []) {
+			if (radio.mode === 'mesh' || !radio.ssid) continue;
+			if (!ifnames[radio.displayName]) ifnames[radio.displayName] = [];
+			ifnames[radio.displayName].push({
+				ifname: radio.ifname,
+				ssid: radio.ssid,
+				band: radio.band
+			});
+		}
+		return ifnames;
+	}, [radiosQuery.data]);
+
 	const wifiClientsQuery = useQuery({
 		queryKey: ['wifiClients'],
 		queryFn: async () => {
-			if (!wifiAPs.data?.wifiAPsIfname) {
-				throw new Error('No wifiAPsIfname found');
-			}
 			const wifiClients = await fetch('/api/routers/all/wifi/clients', {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json'
 				},
-				body: JSON.stringify({ ifnames: wifiAPs.data.wifiAPsIfname })
+				body: JSON.stringify({ ifnames: wifiAPsIfname })
 			}).then((res) => res.json() as Promise<WifiClients>);
 			if (!wifiClients.success) {
 				throw new Error(wifiClients.errorMessage);
@@ -100,14 +136,11 @@ export default function ClientCards({
 
 			return wifiClients.data;
 		},
-		enabled: !!wifiAPs.data?.wifiAPsIfname
+		enabled: Object.keys(wifiAPsIfname).length > 0
 	});
 	const wifiClientsTrafficQuery = useQuery({
 		queryKey: ['wifiClientsTraffic'],
 		queryFn: async () => {
-			if (!wifiAPs?.data?.wifiAPsIfname) {
-				throw new Error('No ifnames found');
-			}
 			const wifiClientsTraffic = await fetch(
 				'/api/routers/all/wifi/clients/traffic',
 				{
@@ -115,7 +148,7 @@ export default function ClientCards({
 					headers: {
 						'Content-Type': 'application/json'
 					},
-					body: JSON.stringify({ ifnames: wifiAPs.data.wifiAPsIfname })
+					body: JSON.stringify({ ifnames: wifiAPsIfname })
 				}
 			).then((res) => res.json() as Promise<WifiClientsTraffic>);
 			if (!wifiClientsTraffic.success) {
@@ -124,7 +157,22 @@ export default function ClientCards({
 			return wifiClientsTraffic.data;
 		},
 		refetchInterval: 3000,
-		enabled: !!wifiAPs.data?.wifiAPsIfname
+		enabled: Object.keys(wifiAPsIfname).length > 0
+	});
+
+	const bandwidthWindowSeconds = BANDWIDTH_WINDOW_SECONDS[sortKey];
+	const bandwidthSummaryQuery = useQuery({
+		queryKey: ['clientBandwidthSummary', bandwidthWindowSeconds],
+		queryFn: async () => {
+			const res = await fetch(
+				`/api/metrics/client-bandwidth-summary?windowSeconds=${bandwidthWindowSeconds}`
+			);
+			const data = (await res.json()) as ClientBandwidthSummary;
+			if (!data.success) throw new Error(data.errorMessage);
+			return data.data;
+		},
+		enabled: bandwidthWindowSeconds !== undefined,
+		refetchInterval: 30_000
 	});
 
 	// Rates are computed here (not per-card) so the list can sort by bandwidth.
@@ -195,11 +243,11 @@ export default function ClientCards({
 					diff = sigA - sigB;
 					break;
 				}
-				case 'bandwidth': {
-					const rateA = rates.get(a.macAddress.toUpperCase());
-					const rateB = rates.get(b.macAddress.toUpperCase());
-					const totalA = (rateA?.rxMbps || 0) + (rateA?.txMbps || 0);
-					const totalB = (rateB?.rxMbps || 0) + (rateB?.txMbps || 0);
+				case 'bandwidth1h':
+				case 'bandwidth1d':
+				case 'bandwidth1mo': {
+					const totalA = bandwidthSummaryQuery.data?.[a.macAddress.toUpperCase()] || 0;
+					const totalB = bandwidthSummaryQuery.data?.[b.macAddress.toUpperCase()] || 0;
 					diff = totalA - totalB;
 					break;
 				}
@@ -212,12 +260,21 @@ export default function ClientCards({
 		dhcpDevicesQuery.data,
 		wifiClientsQuery.data,
 		rates,
+		bandwidthSummaryQuery.data,
 		search,
 		apFilter,
 		bandFilter,
 		sortKey,
 		sortAsc
 	]);
+
+	function handleSortKeyChange(value: string) {
+		const nextKey = value as SortKey;
+		setSortKey(nextKey);
+		if (BANDWIDTH_WINDOW_SECONDS[nextKey] !== undefined) {
+			setSortAsc(false);
+		}
+	}
 
 	if (dhcpDevicesQuery.isError) {
 		return (
@@ -279,18 +336,17 @@ export default function ClientCards({
 						<SelectItem value="6g">6 GHz</SelectItem>
 					</SelectContent>
 				</Select>
-				<Select
-					value={sortKey}
-					onValueChange={(value) => setSortKey(value as SortKey)}
-				>
-					<SelectTrigger className="w-[170px]">
+				<Select value={sortKey} onValueChange={handleSortKeyChange}>
+					<SelectTrigger className="w-[180px]">
 						<SelectValue placeholder="Sort by" />
 					</SelectTrigger>
 					<SelectContent>
 						<SelectItem value="name">Sort: Name</SelectItem>
 						<SelectItem value="ip">Sort: IP address</SelectItem>
 						<SelectItem value="signal">Sort: Signal</SelectItem>
-						<SelectItem value="bandwidth">Sort: Bandwidth (~10s)</SelectItem>
+						<SelectItem value="bandwidth1h">Sort: Bandwidth (1h)</SelectItem>
+						<SelectItem value="bandwidth1d">Sort: Bandwidth (1d)</SelectItem>
+						<SelectItem value="bandwidth1mo">Sort: Bandwidth (1mo)</SelectItem>
 					</SelectContent>
 				</Select>
 				<Button

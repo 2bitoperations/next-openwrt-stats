@@ -3,10 +3,8 @@ import { routersTable } from '@/drizzle/schema/schema';
 import { redirect } from 'next/navigation';
 import { RealtimeTraffic } from '@/components/RealtimeTraffic';
 import ClientCards from '@/components/ClientCards';
-import { WifiAPs } from '@/components/WifiAPs';
 import { Header } from '@/components/Header';
 import { NetworkInterfaceInfo } from '@/components/NetworkInterfaceInfo';
-import { RouterInfo } from '@/components/RouterInfo';
 import { BandwidthHistory } from '@/components/BandwidthHistory';
 import { AccessPoints } from '@/components/AccessPoints';
 import SeparatorWithText from '@/components/Separator';
@@ -24,17 +22,14 @@ export default async function Home() {
 		<div className="bg-background mx-auto flex w-full flex-col items-center justify-center gap-4">
 			<Header pbrEnabled={pbrEnabled} presenceEnabled={presenceEnabled} />
 			<div className="flex w-full flex-col p-4 sm:w-[80%]">
-				<div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+				<div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
 					<RealtimeTraffic MAX_TRAFFIC={MAX_TRAFFIC} />
 					<NetworkInterfaceInfo />
-					<RouterInfo />
 				</div>
 				<SeparatorWithText text="Bandwidth History" />
 				<BandwidthHistory />
 				<SeparatorWithText text="Access Points" />
 				<AccessPoints />
-				<SeparatorWithText text="Wireless APs" />
-				<WifiAPs />
 				<SeparatorWithText text="Clients" />
 				<ClientCards presenceEnabled={presenceEnabled} />
 			</div>

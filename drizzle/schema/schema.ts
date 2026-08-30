@@ -79,7 +79,8 @@ export const prevClientsTable = sqliteTable('prev_clients', {
 
 export const metricScope = {
 	interface: 'interface',
-	client: 'client'
+	client: 'client',
+	radio: 'radio'
 } as const;
 export type MetricScope = (typeof metricScope)[keyof typeof metricScope];
 
@@ -124,8 +125,11 @@ export const metricSampleTable = sqliteTable(
 		rxMax: real().notNull(),
 		txAvg: real().notNull(),
 		txMax: real().notNull(),
-		signalAvg: real(), // client scope only, dBm
-		signalMin: real() // client scope only, dBm (worst case)
+		signalAvg: real(), // client/radio scope, dBm (radio: avg across clients)
+		signalMin: real(), // client/radio scope, dBm (worst case)
+		clientCountAvg: real(), // radio scope only
+		clientCountMax: real(), // radio scope only
+		noiseAvg: real() // radio scope only, dBm
 	},
 	(table) => [
 		index('metric_sample_lookup').on(
@@ -142,3 +146,27 @@ export const metricSampleRelations = relations(metricSampleTable, ({ one }) => (
 		references: [metricSeriesTable.id]
 	})
 }));
+
+// Periodically-refreshed JSON snapshot caches, populated by the collector
+// so API routes never need a live ubus round-trip on the request path.
+export const routerSnapshotTable = sqliteTable('router_snapshot', {
+	routerId: int()
+		.primaryKey()
+		.references(() => routersTable.id),
+	data: text().notNull(), // JSON: routerInfoSchema shape
+	updatedAt: int().notNull()
+});
+
+export const wifiRadioSnapshotTable = sqliteTable('wifi_radio_snapshot', {
+	routerId: int()
+		.primaryKey()
+		.references(() => routersTable.id),
+	data: text().notNull(), // JSON: array of per-radio config for this router
+	updatedAt: int().notNull()
+});
+
+export const dhcpLeaseSnapshotTable = sqliteTable('dhcp_lease_snapshot', {
+	id: int().primaryKey({ autoIncrement: true }),
+	data: text().notNull(), // JSON: deduped array of all leases, all routers
+	updatedAt: int().notNull()
+});

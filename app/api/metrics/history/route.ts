@@ -13,7 +13,7 @@ export async function GET(request: Request) {
 		const from = Number(searchParams.get('from')) || now - 3600;
 		const to = Number(searchParams.get('to')) || now;
 
-		if (scope !== 'interface' && scope !== 'client') {
+		if (scope !== 'interface' && scope !== 'client' && scope !== 'radio') {
 			return new Response(
 				JSON.stringify({ success: false, errorMessage: 'Invalid scope' }),
 				{ status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -27,12 +27,12 @@ export async function GET(request: Request) {
 		}
 
 		let routerId: number | undefined = undefined;
-		if (!combined && scope === 'interface') {
+		if (!combined && (scope === 'interface' || scope === 'radio')) {
 			if (!displayName) {
 				return new Response(
 					JSON.stringify({
 						success: false,
-						errorMessage: 'displayName is required for a non-combined interface query'
+						errorMessage: `displayName is required for a non-combined ${scope} query`
 					}),
 					{ status: 400, headers: { 'Content-Type': 'application/json' } }
 				);

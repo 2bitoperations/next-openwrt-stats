@@ -83,7 +83,7 @@ export function useMetricHistory({
 	combined,
 	rangeSeconds
 }: {
-	scope: 'interface' | 'client';
+	scope: 'interface' | 'client' | 'radio';
 	metricKey: string;
 	displayName?: string;
 	combined?: boolean;

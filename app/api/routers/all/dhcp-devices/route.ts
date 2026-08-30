@@ -1,8 +1,8 @@
-import { getDhcpDevices } from '@/lib/server/dhcpDevices';
+import { getCachedDhcpLeases } from '@/lib/server/metrics';
 
 export async function GET() {
 	try {
-		const response = await getDhcpDevices();
+		const response = await getCachedDhcpLeases();
 		if (!response.success) {
 			return new Response(JSON.stringify(response), {
 				status: 400,

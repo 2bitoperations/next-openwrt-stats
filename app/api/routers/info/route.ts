@@ -1,6 +1,5 @@
-import { logError } from '@/lib/client/errorLog';
 import { getRouter } from '@/lib/server/router';
-import { ubusBatchCall } from '@/lib/server/ubusCalls';
+import { getCachedRouterInfo } from '@/lib/server/metrics';
 import { routerInfoSchema } from '@/types/ubusCalls';
 import { NextRequest } from 'next/server';
 
@@ -40,78 +39,20 @@ export async function GET(request: NextRequest) {
 			});
 		}
 
-		const response = await ubusBatchCall({
-			displayName: router.data.displayName,
-			calls: [
-				{
-					id: 1,
-					params: ['system', 'info', {}]
-				},
-				{
-					id: 2,
-					params: ['system', 'board', {}]
-				}
-				// {
-				// 	id: 3,
-				// 	params: ['luci', 'getVersion', {}]
-				// }
-			]
-		});
-
+		const response = await getCachedRouterInfo(router.data.id);
 		if (!response.success) {
-			logError({
-				displayName: router.data.displayName,
-				errorMessage: 'Failed to get router info',
-				...response
-			});
-			return new Response(
-				JSON.stringify({
-					success: false,
-					errorMessage: 'Failed to get router info'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
+			return new Response(JSON.stringify(response), {
+				status: 404,
+				headers: {
+					'Content-Type': 'application/json'
 				}
-			);
-		}
-		let flattenData: { [key: string]: any } = {};
-		response.data.forEach((data: any) => {
-			if (data.result) {
-				Object.keys(data.result[1]).forEach((key) => {
-					flattenData[key] = data.result[1][key];
-				});
-			}
-		});
-
-		const parsedResponse = routerInfoSchema.safeParse(flattenData);
-		if (!parsedResponse.success) {
-			logError({
-				displayName: router.data.displayName,
-				errorMessage: 'Failed to parse router info',
-				zodError: parsedResponse.error,
-				...response
 			});
-			return new Response(
-				JSON.stringify({
-					success: false,
-					errorMessage: 'Failed to parse router info'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
-			);
 		}
 
 		return new Response(
 			JSON.stringify({
 				success: true,
-				data: parsedResponse.data
+				data: response.data
 			}),
 			{
 				status: 200,
@@ -121,10 +62,6 @@ export async function GET(request: NextRequest) {
 			}
 		);
 	} catch (error) {
-		logError({
-			errorMessage: 'Failed to get router info',
-			error
-		});
 		return new Response(
 			JSON.stringify({
 				success: false,

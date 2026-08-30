@@ -201,6 +201,7 @@ export const wifiConfig = z.object({
 	'.name': z.string(),
 	// Mesh (802.11s) interfaces have no ssid - they're identified by mesh_id instead.
 	ssid: z.string().optional(),
+	mesh_id: z.string().optional(),
 	mode: z.string().optional(),
 	device: z.string(),
 	disabled: z.string().optional(),

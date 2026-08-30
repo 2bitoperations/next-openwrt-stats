@@ -1,5 +1,4 @@
 'use client';
-import { InterfacePicker } from './InterfacePicker';
 import { FileText, RouterIcon } from 'lucide-react';
 import { Button } from './ui/button';
 import { PluginsDropDown } from './PluginsDropDown';
@@ -51,7 +50,6 @@ export function Header({
 					</div>
 
 					<div className="flex items-center gap-2 sm:gap-4">
-						<InterfacePicker />
 						<Button onClick={() => logsDialogState[1](true)} variant="outline">
 							<FileText className="h-4 w-4" />
 							<span className="hidden md:block">Router Logs</span>
