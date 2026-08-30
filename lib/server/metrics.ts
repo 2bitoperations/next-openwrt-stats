@@ -25,9 +25,15 @@ const TIER_5M_RETENTION_SECONDS = 90 * 24 * 60 * 60;
 const CLIENT_POLL_EVERY_N_TICKS = 5; // collector runs every 1s, clients/radios polled every 5s
 const RADIO_CONFIG_EVERY_N_TICKS = 10; // wifi radio config + dhcp leases every ~10s
 const ROUTER_INFO_EVERY_N_TICKS = 30; // uptime/load/mem every ~30s
+const PRUNE_EVERY_N_TICKS = 60; // raw retention is 5 minutes, pruning once/minute is plenty
 const MAX_CATCHUP_BUCKETS = 120;
 
 type MetricScopeName = 'interface' | 'client' | 'radio';
+
+// The `tx` parameter type from a `db.transaction(async (tx) => ...)` callback.
+type DbClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+type RouterRow = { id: number; displayName: string; isPrimary: number };
 
 type CounterState = { rx: number; tx: number; time: number };
 const lastCounters = new Map<string, CounterState>();
@@ -110,25 +116,19 @@ async function getOrCreateSeriesId(
 	}
 }
 
-async function insertRawInterfaceSample({
-	scope,
-	routerId,
-	key,
-	timestamp,
-	rx,
-	tx,
-	signal
-}: {
-	scope: 'interface' | 'client';
-	routerId: number | null;
-	key: string;
-	timestamp: number;
-	rx: number;
-	tx: number;
-	signal?: number;
-}) {
+type PendingRow = typeof metricSampleTable.$inferInsert;
+
+async function buildInterfaceRow(
+	scope: 'interface' | 'client',
+	routerId: number | null,
+	key: string,
+	timestamp: number,
+	rx: number,
+	tx: number,
+	signal?: number
+): Promise<PendingRow> {
 	const seriesId = await getOrCreateSeriesId(scope, routerId, key);
-	await db.insert(metricSampleTable).values({
+	return {
 		seriesId,
 		tier: 'raw',
 		timestamp,
@@ -138,28 +138,20 @@ async function insertRawInterfaceSample({
 		txMax: tx,
 		signalAvg: signal ?? null,
 		signalMin: signal ?? null
-	});
+	};
 }
 
-async function insertRawRadioSample({
-	routerId,
-	key,
-	timestamp,
-	clientCount,
-	signalAvg,
-	signalMin,
-	noiseAvg
-}: {
-	routerId: number;
-	key: string;
-	timestamp: number;
-	clientCount: number;
-	signalAvg: number | null;
-	signalMin: number | null;
-	noiseAvg: number | null;
-}) {
+async function buildRadioRow(
+	routerId: number,
+	key: string,
+	timestamp: number,
+	clientCount: number,
+	signalAvg: number | null,
+	signalMin: number | null,
+	noiseAvg: number | null
+): Promise<PendingRow> {
 	const seriesId = await getOrCreateSeriesId('radio', routerId, key);
-	await db.insert(metricSampleTable).values({
+	return {
 		seriesId,
 		tier: 'raw',
 		timestamp,
@@ -172,25 +164,23 @@ async function insertRawRadioSample({
 		clientCountAvg: clientCount,
 		clientCountMax: clientCount,
 		noiseAvg
-	});
+	};
 }
 
-async function collectInterfaceMetrics(nowSec: number) {
-	const routers = await getRoutersWithId();
-	if (!routers.success) {
-		logError({
-			...routers,
-			errorMessage: 'metrics collector: failed to list routers'
-		});
-		return;
-	}
+// ---- Fetch phase: ubus calls + series-id resolution (cache-hit dominant,
+// rarely touches the DB) - deliberately kept out of the write transaction
+// below, since ubus round-trips are slow and unpredictable and must never
+// hold a DB transaction open while waiting on a router. ----
 
+async function computeInterfaceSampleRows(
+	routers: RouterRow[],
+	nowSec: number
+): Promise<PendingRow[]> {
+	const rows: PendingRow[] = [];
 	await Promise.all(
-		routers.data.map(async (router) => {
+		routers.map(async (router) => {
 			const stats = await getNetworkDeviceStats(router.displayName);
-			if (!stats.success) {
-				return;
-			}
+			if (!stats.success) return;
 			for (const [device, { rxBytes, txBytes }] of Object.entries(stats.data)) {
 				const key = seriesKey('interface', router.id, device);
 				const prev = lastCounters.get(key);
@@ -200,28 +190,33 @@ async function collectInterfaceMetrics(nowSec: number) {
 				const drx = rxBytes - prev.rx;
 				const dtx = txBytes - prev.tx;
 				if (dt <= 0 || drx < 0 || dtx < 0) continue;
-				await insertRawInterfaceSample({
-					scope: 'interface',
-					routerId: router.id,
-					key: device,
-					timestamp: nowSec,
-					rx: drx / dt,
-					tx: dtx / dt
-				});
+				rows.push(
+					await buildInterfaceRow(
+						'interface',
+						router.id,
+						device,
+						nowSec,
+						drx / dt,
+						dtx / dt
+					)
+				);
 			}
 		})
 	);
+	return rows;
 }
 
-async function collectClientAndRadioMetrics(nowSec: number) {
-	if (Object.keys(cachedIfnames).length === 0) return;
+async function computeClientAndRadioSampleRows(
+	routers: RouterRow[],
+	nowSec: number
+): Promise<PendingRow[]> {
+	if (Object.keys(cachedIfnames).length === 0) return [];
 
-	const routers = await getRoutersWithId();
-	if (!routers.success) return;
-	const routerIdByName = new Map(routers.data.map((r) => [r.displayName, r.id]));
-
+	const routerIdByName = new Map(routers.map((r) => [r.displayName, r.id]));
 	const traffic = await getWifiClientsTraffic(cachedIfnames);
-	if (!traffic.success) return;
+	if (!traffic.success) return [];
+
+	const rows: PendingRow[] = [];
 
 	for (const [mac, data] of Object.entries(traffic.data)) {
 		const key = seriesKey('client', null, mac);
@@ -232,15 +227,17 @@ async function collectClientAndRadioMetrics(nowSec: number) {
 		const drx = data.rxBytes - prev.rx;
 		const dtx = data.txBytes - prev.tx;
 		if (dt <= 0 || drx < 0 || dtx < 0) continue;
-		await insertRawInterfaceSample({
-			scope: 'client',
-			routerId: null,
-			key: mac,
-			timestamp: nowSec,
-			rx: drx / dt,
-			tx: dtx / dt,
-			signal: data.signal
-		});
+		rows.push(
+			await buildInterfaceRow(
+				'client',
+				null,
+				mac,
+				nowSec,
+				drx / dt,
+				dtx / dt,
+				data.signal
+			)
+		);
 	}
 
 	for (const [displayName, radios] of Object.entries(traffic.perRadio)) {
@@ -249,77 +246,69 @@ async function collectClientAndRadioMetrics(nowSec: number) {
 		for (const [ifname, radioStats] of Object.entries(radios)) {
 			const signals = radioStats.signals;
 			const noises = radioStats.noises;
-			await insertRawRadioSample({
-				routerId,
-				key: ifname,
-				timestamp: nowSec,
-				clientCount: radioStats.clientCount,
-				signalAvg: signals.length
-					? signals.reduce((a, b) => a + b, 0) / signals.length
-					: null,
-				signalMin: signals.length ? Math.min(...signals) : null,
-				noiseAvg: noises.length
-					? noises.reduce((a, b) => a + b, 0) / noises.length
-					: null
-			});
+			rows.push(
+				await buildRadioRow(
+					routerId,
+					ifname,
+					nowSec,
+					radioStats.clientCount,
+					signals.length
+						? signals.reduce((a, b) => a + b, 0) / signals.length
+						: null,
+					signals.length ? Math.min(...signals) : null,
+					noises.length
+						? noises.reduce((a, b) => a + b, 0) / noises.length
+						: null
+				)
+			);
 		}
 	}
+
+	return rows;
 }
 
-async function refreshWifiRadioSnapshot() {
+async function fetchWifiRadioSnapshot(routers: RouterRow[]) {
 	const radios = await getWifiRadios();
 	if (!radios.success) {
 		logError({
 			...radios,
 			errorMessage: 'metrics collector: failed to refresh wifi radio snapshot'
 		});
-		return;
+		return null;
 	}
 
-	const routers = await getRoutersWithId();
-	if (!routers.success) return;
-	const routerIdByName = new Map(routers.data.map((r) => [r.displayName, r.id]));
-
+	const routerIdByName = new Map(routers.map((r) => [r.displayName, r.id]));
+	const byRouterId = new Map<number, string>(); // routerId -> JSON of that router's radios
 	const byRouter = new Map<string, typeof radios.data>();
 	for (const radio of radios.data) {
 		if (!byRouter.has(radio.displayName)) byRouter.set(radio.displayName, []);
 		byRouter.get(radio.displayName)!.push(radio);
 	}
-
-	const now = Math.floor(Date.now() / 1000);
 	for (const [displayName, routerRadios] of byRouter.entries()) {
 		const routerId = routerIdByName.get(displayName);
 		if (routerId === undefined) continue;
-		await db
-			.insert(wifiRadioSnapshotTable)
-			.values({ routerId, data: JSON.stringify(routerRadios), updatedAt: now })
-			.onConflictDoUpdate({
-				target: wifiRadioSnapshotTable.routerId,
-				set: { data: JSON.stringify(routerRadios), updatedAt: now }
-			});
+		byRouterId.set(routerId, JSON.stringify(routerRadios));
 	}
 
-	// Rebuild the ap-only, ssid-bearing ifname map used for client polling.
-	const nextIfnames: WifiIfnames = {};
+	// ap-only, ssid-bearing ifname map used for client polling next tick.
+	const ifnames: WifiIfnames = {};
 	for (const radio of radios.data) {
 		if (radio.mode === 'mesh' || !radio.ssid) continue;
-		if (!nextIfnames[radio.displayName]) nextIfnames[radio.displayName] = [];
-		nextIfnames[radio.displayName].push({
+		if (!ifnames[radio.displayName]) ifnames[radio.displayName] = [];
+		ifnames[radio.displayName].push({
 			ifname: radio.ifname,
 			ssid: radio.ssid,
 			band: radio.band
 		});
 	}
-	cachedIfnames = nextIfnames;
+
+	return { byRouterId, ifnames };
 }
 
-async function refreshRouterSnapshot() {
-	const routers = await getRoutersWithId();
-	if (!routers.success) return;
-	const now = Math.floor(Date.now() / 1000);
-
+async function fetchRouterSnapshotRows(routers: RouterRow[]) {
+	const results: { routerId: number; data: string }[] = [];
 	await Promise.all(
-		routers.data.map(async (router) => {
+		routers.map(async (router) => {
 			const response = await ubusBatchCall({
 				displayName: router.displayName,
 				calls: [
@@ -338,45 +327,29 @@ async function refreshRouterSnapshot() {
 			});
 			const parsed = routerInfoSchema.safeParse(flattenData);
 			if (!parsed.success) return;
-			await db
-				.insert(routerSnapshotTable)
-				.values({
-					routerId: router.id,
-					data: JSON.stringify(parsed.data),
-					updatedAt: now
-				})
-				.onConflictDoUpdate({
-					target: routerSnapshotTable.routerId,
-					set: { data: JSON.stringify(parsed.data), updatedAt: now }
-				});
+			results.push({ routerId: router.id, data: JSON.stringify(parsed.data) });
 		})
 	);
+	return results;
 }
 
-async function refreshDhcpSnapshot() {
-	const leases = await getDhcpDevices();
-	if (!leases.success) return;
-	const now = Math.floor(Date.now() / 1000);
-	await db
-		.insert(dhcpLeaseSnapshotTable)
-		.values({ id: 1, data: JSON.stringify(leases.data), updatedAt: now })
-		.onConflictDoUpdate({
-			target: dhcpLeaseSnapshotTable.id,
-			set: { data: JSON.stringify(leases.data), updatedAt: now }
-		});
-}
+// ---- Write phase: pure DB, all wrapped in one transaction per tick so the
+// whole batch fsyncs once instead of once per statement. ----
 
-async function rollupTier({
-	sourceTier,
-	targetTier,
-	stepSeconds,
-	nowSec
-}: {
-	sourceTier: MetricTier;
-	targetTier: '1m' | '5m' | '1h';
-	stepSeconds: number;
-	nowSec: number;
-}) {
+async function rollupTier(
+	tx: DbClient,
+	{
+		sourceTier,
+		targetTier,
+		stepSeconds,
+		nowSec
+	}: {
+		sourceTier: MetricTier;
+		targetTier: '1m' | '5m' | '1h';
+		stepSeconds: number;
+		nowSec: number;
+	}
+) {
 	const currentBucket = Math.floor(nowSec / stepSeconds);
 	const cursor = rollupCursors[targetTier];
 	if (cursor === null) {
@@ -389,7 +362,7 @@ async function rollupTier({
 	for (let bucket = startBucket; bucket < currentBucket; bucket++) {
 		const bucketStart = bucket * stepSeconds;
 		const bucketEnd = bucketStart + stepSeconds;
-		const rows = await db
+		const rows = await tx
 			.select({
 				seriesId: metricSampleTable.seriesId,
 				rxAvg: avg(metricSampleTable.rxAvg),
@@ -413,7 +386,7 @@ async function rollupTier({
 			.groupBy(metricSampleTable.seriesId);
 
 		if (rows.length) {
-			await db.insert(metricSampleTable).values(
+			await tx.insert(metricSampleTable).values(
 				rows.map((r) => ({
 					seriesId: r.seriesId,
 					tier: targetTier,
@@ -436,8 +409,8 @@ async function rollupTier({
 	rollupCursors[targetTier] = currentBucket;
 }
 
-async function pruneOldSamples(nowSec: number) {
-	await db
+async function pruneOldSamples(tx: DbClient, nowSec: number) {
+	await tx
 		.delete(metricSampleTable)
 		.where(
 			and(
@@ -445,7 +418,7 @@ async function pruneOldSamples(nowSec: number) {
 				sql`${metricSampleTable.timestamp} < ${nowSec - RAW_RETENTION_SECONDS}`
 			)
 		);
-	await db
+	await tx
 		.delete(metricSampleTable)
 		.where(
 			and(
@@ -453,7 +426,7 @@ async function pruneOldSamples(nowSec: number) {
 				sql`${metricSampleTable.timestamp} < ${nowSec - TIER_1M_RETENTION_SECONDS}`
 			)
 		);
-	await db
+	await tx
 		.delete(metricSampleTable)
 		.where(
 			and(
@@ -468,37 +441,110 @@ export async function collectTick() {
 	isCollecting = true;
 	try {
 		const nowSec = Math.floor(Date.now() / 1000);
-		await collectInterfaceMetrics(nowSec);
 		tickCount++;
+
+		const routers = await getRoutersWithId();
+		if (!routers.success) {
+			logError({
+				...routers,
+				errorMessage: 'metrics collector: failed to list routers'
+			});
+			return;
+		}
+
+		// Fetch phase - all ubus calls happen here, outside any transaction.
+		const interfaceRows = await computeInterfaceSampleRows(
+			routers.data,
+			nowSec
+		);
+
+		let radioSnapshot: Awaited<ReturnType<typeof fetchWifiRadioSnapshot>> =
+			null;
+		let dhcpLeases: Awaited<ReturnType<typeof getDhcpDevices>> | null = null;
 		if (tickCount % RADIO_CONFIG_EVERY_N_TICKS === 0) {
-			await refreshWifiRadioSnapshot();
-			await refreshDhcpSnapshot();
+			radioSnapshot = await fetchWifiRadioSnapshot(routers.data);
+			dhcpLeases = await getDhcpDevices();
 		}
+
+		let routerSnapshotRows: Awaited<ReturnType<typeof fetchRouterSnapshotRows>> =
+			[];
 		if (tickCount % ROUTER_INFO_EVERY_N_TICKS === 0) {
-			await refreshRouterSnapshot();
+			routerSnapshotRows = await fetchRouterSnapshotRows(routers.data);
 		}
+
+		let clientRadioRows: PendingRow[] = [];
 		if (tickCount % CLIENT_POLL_EVERY_N_TICKS === 0) {
-			await collectClientAndRadioMetrics(nowSec);
+			clientRadioRows = await computeClientAndRadioSampleRows(
+				routers.data,
+				nowSec
+			);
 		}
-		await rollupTier({
-			sourceTier: 'raw',
-			targetTier: '1m',
-			stepSeconds: 60,
-			nowSec
+
+		// Write phase - everything below is pure DB work, batched into one
+		// transaction so it fsyncs once instead of once per statement.
+		await db.transaction(async (tx) => {
+			const allSampleRows = [...interfaceRows, ...clientRadioRows];
+			if (allSampleRows.length) {
+				await tx.insert(metricSampleTable).values(allSampleRows);
+			}
+
+			if (radioSnapshot) {
+				for (const [routerId, data] of radioSnapshot.byRouterId) {
+					await tx
+						.insert(wifiRadioSnapshotTable)
+						.values({ routerId, data, updatedAt: nowSec })
+						.onConflictDoUpdate({
+							target: wifiRadioSnapshotTable.routerId,
+							set: { data, updatedAt: nowSec }
+						});
+				}
+			}
+			if (dhcpLeases?.success) {
+				const data = JSON.stringify(dhcpLeases.data);
+				await tx
+					.insert(dhcpLeaseSnapshotTable)
+					.values({ id: 1, data, updatedAt: nowSec })
+					.onConflictDoUpdate({
+						target: dhcpLeaseSnapshotTable.id,
+						set: { data, updatedAt: nowSec }
+					});
+			}
+			for (const row of routerSnapshotRows) {
+				await tx
+					.insert(routerSnapshotTable)
+					.values({ ...row, updatedAt: nowSec })
+					.onConflictDoUpdate({
+						target: routerSnapshotTable.routerId,
+						set: { data: row.data, updatedAt: nowSec }
+					});
+			}
+
+			await rollupTier(tx, {
+				sourceTier: 'raw',
+				targetTier: '1m',
+				stepSeconds: 60,
+				nowSec
+			});
+			await rollupTier(tx, {
+				sourceTier: '1m',
+				targetTier: '5m',
+				stepSeconds: 300,
+				nowSec
+			});
+			await rollupTier(tx, {
+				sourceTier: '5m',
+				targetTier: '1h',
+				stepSeconds: 3600,
+				nowSec
+			});
+			if (tickCount % PRUNE_EVERY_N_TICKS === 0) {
+				await pruneOldSamples(tx, nowSec);
+			}
 		});
-		await rollupTier({
-			sourceTier: '1m',
-			targetTier: '5m',
-			stepSeconds: 300,
-			nowSec
-		});
-		await rollupTier({
-			sourceTier: '5m',
-			targetTier: '1h',
-			stepSeconds: 3600,
-			nowSec
-		});
-		await pruneOldSamples(nowSec);
+
+		if (radioSnapshot) {
+			cachedIfnames = radioSnapshot.ifnames;
+		}
 	} catch (error) {
 		logError({ errorMessage: 'metrics collector tick failed', error });
 	} finally {
