@@ -7,6 +7,8 @@ import { WifiAPs } from '@/components/WifiAPs';
 import { Header } from '@/components/Header';
 import { NetworkInterfaceInfo } from '@/components/NetworkInterfaceInfo';
 import { RouterInfo } from '@/components/RouterInfo';
+import { BandwidthHistory } from '@/components/BandwidthHistory';
+import { AccessPoints } from '@/components/AccessPoints';
 import SeparatorWithText from '@/components/Separator';
 export const dynamic = 'force-dynamic';
 
@@ -27,6 +29,10 @@ export default async function Home() {
 					<NetworkInterfaceInfo />
 					<RouterInfo />
 				</div>
+				<SeparatorWithText text="Bandwidth History" />
+				<BandwidthHistory />
+				<SeparatorWithText text="Access Points" />
+				<AccessPoints />
 				<SeparatorWithText text="Wireless APs" />
 				<WifiAPs />
 				<SeparatorWithText text="Clients" />

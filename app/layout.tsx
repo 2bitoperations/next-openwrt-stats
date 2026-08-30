@@ -2,6 +2,7 @@ import './globals.css';
 import { Toaster } from '@/components/ui/sonner';
 import { QueryProvider } from '@/providers/queryProvider';
 import { NetworkProvider } from '@/providers/networkContext';
+import { ActiveRouterProvider } from '@/providers/activeRouterContext';
 import { UpdateManagerProvider } from '@/providers/updateManagerContext';
 
 export const metadata = {
@@ -19,9 +20,11 @@ export default function RootLayout({
 			<body className="font-sans">
 				<Toaster />
 				<QueryProvider>
-					<NetworkProvider>
-						<UpdateManagerProvider>{children}</UpdateManagerProvider>
-					</NetworkProvider>
+					<ActiveRouterProvider>
+						<NetworkProvider>
+							<UpdateManagerProvider>{children}</UpdateManagerProvider>
+						</NetworkProvider>
+					</ActiveRouterProvider>
 				</QueryProvider>
 			</body>
 		</html>

@@ -7,9 +7,11 @@ import {
 	useContext,
 	useState,
 	ReactNode,
-	useEffect
+	useEffect,
+	useRef
 } from 'react';
 import { usePathname } from 'next/navigation';
+import { useActiveRouter } from './activeRouterContext';
 
 type NetworkContextType = {
 	networkInterfaces?: NetworkInterface[];
@@ -21,19 +23,31 @@ type NetworkContextType = {
 
 const NetworkContext = createContext<NetworkContextType | undefined>(undefined);
 
+function pickDefaultDevice(networkInterfaces: NetworkInterface[]) {
+	const hasAddress = (device: NetworkInterface) =>
+		device.up && (device['ipv4-address']?.length ?? 0) > 0;
+	return (
+		networkInterfaces.find((device) => device.interface === 'wan' && hasAddress(device)) ||
+		networkInterfaces.find(hasAddress) ||
+		networkInterfaces.find((device) => device.up) ||
+		networkInterfaces[0]
+	);
+}
+
 export function NetworkProvider({ children }: { children: ReactNode }) {
 	const [activeDevice, setActiveDevice] = useState<NetworkInterface>();
 	const pathname = usePathname();
+	const { activeRouter } = useActiveRouter();
 	const {
 		data: networkInterfaces,
 		isLoading,
 		error,
 		dataUpdatedAt
 	} = useQuery({
-		queryKey: ['networkInterfaces'],
+		queryKey: ['networkInterfaces', activeRouter],
 		queryFn: async () => {
 			const networkInterfaces = await fetch(
-				'/api/routers/primary/interfaces'
+				`/api/routers/primary/interfaces?displayName=${activeRouter}`
 			).then((res) => res.json() as Promise<NetworkInterfaces>);
 			if (!networkInterfaces.success) {
 				throw new Error(networkInterfaces.errorMessage);
@@ -45,14 +59,32 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
 		},
 		refetchInterval: false,
 		retry: 1,
-		enabled: pathname !== '/register'
+		enabled: pathname !== '/register' && !!activeRouter
 	});
 
+	const prevActiveRouterRef = useRef<string | undefined>(undefined);
+
 	useEffect(() => {
+		if (!networkInterfaces) return;
+
+		const routerChanged =
+			prevActiveRouterRef.current !== undefined &&
+			prevActiveRouterRef.current !== activeRouter;
+		prevActiveRouterRef.current = activeRouter;
+
+		if (routerChanged) {
+			// Different routers commonly expose an interface with the same name
+			// (e.g. every router has a "lan"), so name-based matching below would
+			// otherwise keep showing the PREVIOUS router's device. Always pick a
+			// fresh default when the router itself changes.
+			setActiveDevice(pickDefaultDevice(networkInterfaces));
+			return;
+		}
+
 		if (
-			(networkInterfaces && !activeDevice) ||
-			// This is in case the primary router is switched. This ensures the activeDevice is valid
-			networkInterfaces?.findIndex(
+			!activeDevice ||
+			// This is in case the selected interface went away (e.g. reconfigured on the router).
+			networkInterfaces.findIndex(
 				(device) =>
 					device.device === activeDevice?.device &&
 					device.interface === activeDevice?.interface
@@ -66,24 +98,19 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
 				const activeDevice = networkInterfaces?.find(
 					(device) =>
 						device.device === localStorageActiveDeviceParsed.device &&
-						device.interface === localStorageActiveDeviceParsed.interface
+						device.interface === localStorageActiveDeviceParsed.interface &&
+						device.up
 				);
 				if (!activeDevice) {
-					const wanDevice = networkInterfaces?.find(
-						(device) => device.interface === 'wan'
-					);
-					setActiveDevice(wanDevice || networkInterfaces[0]);
+					setActiveDevice(pickDefaultDevice(networkInterfaces));
 					return;
 				}
 				setActiveDevice(activeDevice);
 			} else {
-				const wanDevice = networkInterfaces?.find(
-					(device) => device.interface === 'wan'
-				);
-				setActiveDevice(wanDevice || networkInterfaces[0]);
+				setActiveDevice(pickDefaultDevice(networkInterfaces));
 			}
 		}
-	}, [dataUpdatedAt, activeDevice]);
+	}, [dataUpdatedAt, activeDevice, activeRouter, networkInterfaces]);
 
 	useEffect(() => {
 		if (activeDevice) {

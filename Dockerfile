@@ -38,6 +38,7 @@ RUN mkdir .next
 # https://nextjs.org/docs/advanced-features/output-file-tracing
 COPY --from=builder /app/.next/standalone ./
 COPY presence-cron.js ./
+COPY metrics-cron.js ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY ./drizzle ./drizzle

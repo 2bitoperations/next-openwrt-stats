@@ -2,26 +2,68 @@
 import { DhcpDevices } from '@/lib/server/dhcpDevices';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader } from './ui/card';
-import { LoaderCircle, RouterIcon, UserIcon, WifiIcon } from 'lucide-react';
+import {
+	ArrowDownAZ,
+	ArrowUpAZ,
+	LoaderCircle,
+	RouterIcon,
+	SearchIcon,
+	UserIcon,
+	WifiIcon
+} from 'lucide-react';
 import { WifiClients, WifiClientsTraffic } from '@/lib/server/wifiAPs';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
 	calcMbps,
 	formatBand,
 	formatBytes,
+	ipToSortableNumber,
 	secondsToHumanReadable
 } from '@/lib/utils';
 import { Button } from './ui/button';
-import { useEffect, useState } from 'react';
+import { Input } from './ui/input';
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue
+} from './ui/select';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useWifiAPsQuery } from '@/providers/wifiAPsContext';
+import { useActiveRouter } from '@/providers/activeRouterContext';
 import { SVGIcon } from './SVGIcons';
 import { PresenceHistoryDialog } from './ClientPresence';
+import { ClientHistoryDialog } from './ClientHistoryDialog';
+import { Progress } from '@/components/ui/progress';
+
+type WifiDataEntry = {
+	signal: number;
+	noise?: number;
+	connected_time?: number;
+	rx: { packets: number; bytes: number };
+	tx: { packets: number; bytes: number };
+	displayName: string;
+	ssid: string;
+	band: string;
+};
+
+type Rate = { rxMbps: number; txMbps: number };
+
+type SortKey = 'name' | 'ip' | 'signal' | 'bandwidth';
 
 export default function ClientCards({
 	presenceEnabled
 }: {
 	presenceEnabled: boolean;
 }) {
+	const { allRouters } = useActiveRouter();
+	const [search, setSearch] = useState('');
+	const [apFilter, setApFilter] = useState('all');
+	const [bandFilter, setBandFilter] = useState('all');
+	const [sortKey, setSortKey] = useState<SortKey>('name');
+	const [sortAsc, setSortAsc] = useState(true);
+
 	const dhcpDevicesQuery = useQuery({
 		queryKey: ['dhcpDevices'],
 		queryFn: async () => {
@@ -85,6 +127,98 @@ export default function ClientCards({
 		enabled: !!wifiAPs.data?.wifiAPsIfname
 	});
 
+	// Rates are computed here (not per-card) so the list can sort by bandwidth.
+	const prevTrafficRef = useRef<
+		Map<string, { rxBytes: number; txBytes: number; time: number }>
+	>(new Map());
+	const [rates, setRates] = useState<Map<string, Rate>>(new Map());
+
+	useEffect(() => {
+		if (!wifiClientsTrafficQuery.data) return;
+		const prevMap = prevTrafficRef.current;
+		const newRates = new Map<string, Rate>();
+		Object.entries(wifiClientsTrafficQuery.data).forEach(([mac, data]) => {
+			const prev = prevMap.get(mac);
+			if (prev) {
+				const traffic = calcMbps(
+					[prev.time, prev.rxBytes, 0, prev.txBytes],
+					[data.time, data.rxBytes, 0, data.txBytes]
+				);
+				newRates.set(mac, { rxMbps: traffic.rxMbps, txMbps: traffic.txMbps });
+			}
+			prevMap.set(mac, data);
+		});
+		setRates(newRates);
+	}, [wifiClientsTrafficQuery.data]);
+
+	const filteredSortedDevices = useMemo(() => {
+		if (!dhcpDevicesQuery.data) return [];
+		const searchLower = search.trim().toLowerCase();
+
+		let devices = dhcpDevicesQuery.data.filter((device) => {
+			const wifiData = wifiClientsQuery.data?.[device.macAddress.toUpperCase()];
+
+			if (searchLower) {
+				const matches =
+					device.deviceName.toLowerCase().includes(searchLower) ||
+					device.ipAddress.toLowerCase().includes(searchLower) ||
+					device.macAddress.toLowerCase().includes(searchLower);
+				if (!matches) return false;
+			}
+
+			if (apFilter !== 'all') {
+				if (!wifiData || wifiData.displayName !== apFilter) return false;
+			}
+
+			if (bandFilter !== 'all') {
+				if (!wifiData || wifiData.band !== bandFilter) return false;
+			}
+
+			return true;
+		});
+
+		devices = devices.sort((a, b) => {
+			let diff = 0;
+			switch (sortKey) {
+				case 'name':
+					diff = a.deviceName.localeCompare(b.deviceName);
+					break;
+				case 'ip':
+					diff =
+						ipToSortableNumber(a.ipAddress) - ipToSortableNumber(b.ipAddress);
+					break;
+				case 'signal': {
+					const sigA =
+						wifiClientsQuery.data?.[a.macAddress.toUpperCase()]?.signal ?? -999;
+					const sigB =
+						wifiClientsQuery.data?.[b.macAddress.toUpperCase()]?.signal ?? -999;
+					diff = sigA - sigB;
+					break;
+				}
+				case 'bandwidth': {
+					const rateA = rates.get(a.macAddress.toUpperCase());
+					const rateB = rates.get(b.macAddress.toUpperCase());
+					const totalA = (rateA?.rxMbps || 0) + (rateA?.txMbps || 0);
+					const totalB = (rateB?.rxMbps || 0) + (rateB?.txMbps || 0);
+					diff = totalA - totalB;
+					break;
+				}
+			}
+			return sortAsc ? diff : -diff;
+		});
+
+		return devices;
+	}, [
+		dhcpDevicesQuery.data,
+		wifiClientsQuery.data,
+		rates,
+		search,
+		apFilter,
+		bandFilter,
+		sortKey,
+		sortAsc
+	]);
+
 	if (dhcpDevicesQuery.isError) {
 		return (
 			<div className="w-full py-4">
@@ -110,19 +244,82 @@ export default function ClientCards({
 	}
 
 	return (
-		<div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-			{dhcpDevicesQuery.data &&
-				dhcpDevicesQuery.data.map((device) => (
+		<div className="w-full space-y-4">
+			<div className="flex flex-wrap items-center gap-2">
+				<div className="relative w-full sm:w-64">
+					<SearchIcon className="text-muted-foreground absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2" />
+					<Input
+						placeholder="Search name, IP, or MAC"
+						className="pl-8"
+						value={search}
+						onChange={(e) => setSearch(e.target.value)}
+					/>
+				</div>
+				<Select value={apFilter} onValueChange={setApFilter}>
+					<SelectTrigger className="w-[160px]">
+						<SelectValue placeholder="AP" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="all">All APs</SelectItem>
+						{(allRouters || []).map((router) => (
+							<SelectItem key={router.displayName} value={router.displayName}>
+								{router.displayName}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+				<Select value={bandFilter} onValueChange={setBandFilter}>
+					<SelectTrigger className="w-[140px]">
+						<SelectValue placeholder="Band" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="all">All bands</SelectItem>
+						<SelectItem value="2g">2.4 GHz</SelectItem>
+						<SelectItem value="5g">5 GHz</SelectItem>
+						<SelectItem value="6g">6 GHz</SelectItem>
+					</SelectContent>
+				</Select>
+				<Select
+					value={sortKey}
+					onValueChange={(value) => setSortKey(value as SortKey)}
+				>
+					<SelectTrigger className="w-[170px]">
+						<SelectValue placeholder="Sort by" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="name">Sort: Name</SelectItem>
+						<SelectItem value="ip">Sort: IP address</SelectItem>
+						<SelectItem value="signal">Sort: Signal</SelectItem>
+						<SelectItem value="bandwidth">Sort: Bandwidth (~10s)</SelectItem>
+					</SelectContent>
+				</Select>
+				<Button
+					variant="outline"
+					size="icon"
+					onClick={() => setSortAsc((prev) => !prev)}
+					title={sortAsc ? 'Ascending' : 'Descending'}
+				>
+					{sortAsc ? (
+						<ArrowUpAZ className="h-4 w-4" />
+					) : (
+						<ArrowDownAZ className="h-4 w-4" />
+					)}
+				</Button>
+				<span className="text-muted-foreground ml-auto text-xs">
+					{filteredSortedDevices.length} of {dhcpDevicesQuery.data?.length || 0}
+				</span>
+			</div>
+			<div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+				{filteredSortedDevices.map((device) => (
 					<ClientCard
 						device={device}
 						key={device.macAddress}
 						wifiData={wifiClientsQuery.data?.[device.macAddress.toUpperCase()]}
-						wifiClientTraffic={
-							wifiClientsTrafficQuery.data?.[device.macAddress.toUpperCase()]
-						}
+						rate={rates.get(device.macAddress.toUpperCase())}
 						presenceEnabled={presenceEnabled}
 					/>
 				))}
+			</div>
 		</div>
 	);
 }
@@ -130,7 +327,7 @@ export default function ClientCards({
 function ClientCard({
 	device,
 	wifiData,
-	wifiClientTraffic,
+	rate,
 	presenceEnabled
 }: {
 	device: {
@@ -139,74 +336,18 @@ function ClientCard({
 		ipAddress: string;
 		leaseTime: number | boolean;
 	};
-	wifiClientTraffic:
-		| {
-				txBytes: number;
-				rxBytes: number;
-				time: number;
-		  }
-		| undefined;
-	wifiData:
-		| {
-				signal: number;
-				noise?: number;
-				connected_time?: number;
-				rx: {
-					packets: number;
-					bytes: number;
-				};
-				tx: {
-					packets: number;
-					bytes: number;
-				};
-				displayName: string;
-				ssid: string;
-				band: string;
-		  }
-		| undefined;
+	rate: Rate | undefined;
+	wifiData: WifiDataEntry | undefined;
 	presenceEnabled: boolean;
 }) {
-	const [bytesHistory, setBytesHistory] = useState<
-		[number, number, number, number][]
-	>([]);
-
-	const [realTimeTraffic, setRealTimeTraffic] = useState<{
-		rxBytes: number;
-		txBytes: number;
-	} | null>(null);
-
-	useEffect(() => {
-		if (wifiClientTraffic) {
-			setBytesHistory((prev) => [
-				[
-					wifiClientTraffic.time,
-					wifiClientTraffic.rxBytes,
-					0,
-					wifiClientTraffic.txBytes
-				],
-				...prev.slice(0, 10)
-			]);
-		}
-	}, [wifiClientTraffic]);
-
-	useEffect(() => {
-		if (bytesHistory.length > 1) {
-			const traffic = calcMbps(bytesHistory[1], bytesHistory[0]);
-			setRealTimeTraffic({
-				rxBytes: traffic.rxMbps,
-				txBytes: traffic.txMbps
-			});
-		}
-	}, [bytesHistory[0]]);
 	return (
 		<Card className="w-full gap-2">
 			<CardHeader className="relative pb-2 pt-1">
 				<span className="absolute -top-5 right-7 text-[13.2px] font-medium text-white/70">
-					{wifiData &&
-					(realTimeTraffic?.rxBytes || realTimeTraffic?.txBytes) ? (
+					{wifiData && (rate?.rxMbps || rate?.txMbps) ? (
 						<>
-							↓ {realTimeTraffic?.txBytes.toFixed(2) || '0.00'} / ↑{' '}
-							{realTimeTraffic?.rxBytes.toFixed(2) || '0.00'} Mbps
+							↓ {rate?.rxMbps.toFixed(2) || '0.00'} / ↑{' '}
+							{rate?.txMbps.toFixed(2) || '0.00'} Mbps
 						</>
 					) : (
 						<></>
@@ -230,6 +371,11 @@ function ClientCard({
 						{device.deviceName || 'Unknown Device'}
 					</h3>
 					<div className="ml-auto flex items-center gap-2">
+						<ClientHistoryDialog
+							clientMac={device.macAddress}
+							clientName={device.deviceName}
+							presenceEnabled={presenceEnabled}
+						/>
 						{presenceEnabled && (
 							<PresenceHistoryDialog
 								clientMac={device.macAddress}
@@ -296,6 +442,26 @@ function ClientCard({
 			</CardHeader>
 			<CardContent>
 				<div className="space-y-2 text-sm">
+					{wifiData && (
+						<div className="space-y-1.5 pb-1">
+							<div className="flex items-center gap-2">
+								<span className="text-muted-foreground w-14 text-xs">
+									Down
+								</span>
+								<Progress
+									className="h-1.5 flex-1"
+									value={Math.min(((rate?.rxMbps || 0) / 50) * 100, 100)}
+								/>
+							</div>
+							<div className="flex items-center gap-2">
+								<span className="text-muted-foreground w-14 text-xs">Up</span>
+								<Progress
+									className="h-1.5 flex-1"
+									value={Math.min(((rate?.txMbps || 0) / 50) * 100, 100)}
+								/>
+							</div>
+						</div>
+					)}
 					<p className="flex justify-between">
 						<span className="text-muted-foreground">IP Address:</span>
 						<span>{device.ipAddress}</span>
@@ -304,10 +470,6 @@ function ClientCard({
 						<span className="text-muted-foreground">MAC Address:</span>
 						<span>{device.macAddress}</span>
 					</p>
-					{/* <p className="flex justify-between">
-						<span className="text-muted-foreground">Realtime Traffic:</span>
-
-					</p> */}
 					<p className="flex justify-between">
 						<span className="text-muted-foreground">Traffic Stats:</span>
 						<span>

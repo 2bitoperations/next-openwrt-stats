@@ -2,6 +2,7 @@ import 'server-only';
 import {
 	getNetworkInterfacesSchema,
 	getRealTimeStatsSchema,
+	networkDeviceStatusSchema,
 	wireguardInterfacesSchema,
 	wireguardPeerConfigArraySchema
 } from '@/types/ubusCalls';
@@ -13,20 +14,22 @@ import { logError } from '../client/errorLog';
 export type NetworkInterfaces = Awaited<
 	ReturnType<typeof getNetworkInterfaces>
 >;
-export async function getNetworkInterfaces() {
-	const primaryRouter = await getPrimaryRouter();
-	if (!primaryRouter.success) {
-		return primaryRouter;
+export async function getNetworkInterfaces(displayName?: string) {
+	const router = displayName
+		? { success: true, data: { displayName } } as const
+		: await getPrimaryRouter();
+	if (!router.success) {
+		return router;
 	}
 
 	const ubusResponse = await ubusCall({
-		displayName: primaryRouter.data.displayName,
+		displayName: router.data.displayName,
 		params: ['network.interface', 'dump', {}]
 	});
 
 	if (!ubusResponse.success) {
 		logError({
-			displayName: primaryRouter.data.displayName,
+			displayName: router.data.displayName,
 			errorMessage: 'Failed to get network interfaces',
 			...ubusResponse
 		});
@@ -41,7 +44,7 @@ export async function getNetworkInterfaces() {
 	);
 	if (!parsedUbusResponse.success) {
 		logError({
-			displayName: primaryRouter.data.displayName,
+			displayName: router.data.displayName,
 			errorMessage: 'Failed to parse network interfaces response',
 			zodError: parsedUbusResponse.error,
 			...ubusResponse
@@ -68,14 +71,16 @@ export async function getNetworkInterfaces() {
 }
 
 export type RealTimeTraffic = Awaited<ReturnType<typeof getRealTimeTraffic>>;
-export async function getRealTimeTraffic(device: string) {
-	const primaryRouter = await getPrimaryRouter();
-	if (!primaryRouter.success) {
-		return primaryRouter;
+export async function getRealTimeTraffic(device: string, displayName?: string) {
+	const router = displayName
+		? { success: true, data: { displayName } } as const
+		: await getPrimaryRouter();
+	if (!router.success) {
+		return router;
 	}
 
 	const ubusResponse = await ubusCall({
-		displayName: primaryRouter.data.displayName,
+		displayName: router.data.displayName,
 		params: [
 			'luci',
 			'getRealtimeStats',
@@ -88,7 +93,7 @@ export async function getRealTimeTraffic(device: string) {
 
 	if (!ubusResponse.success) {
 		logError({
-			displayName: primaryRouter.data.displayName,
+			displayName: router.data.displayName,
 			errorMessage: 'Failed to get real time traffic',
 			...ubusResponse
 		});
@@ -104,7 +109,7 @@ export async function getRealTimeTraffic(device: string) {
 
 	if (!parsedUbusResponse.success) {
 		logError({
-			displayName: primaryRouter.data.displayName,
+			displayName: router.data.displayName,
 			errorMessage: 'Failed to parse real-time traffic stats response',
 			zodError: parsedUbusResponse.error,
 			...ubusResponse
@@ -127,6 +132,61 @@ export async function getRealTimeTraffic(device: string) {
 	return {
 		success: false,
 		errorMessage: 'Failed to parse ubus response'
+	} as const;
+}
+
+export type NetworkDeviceStats = Awaited<
+	ReturnType<typeof getNetworkDeviceStats>
+>;
+export async function getNetworkDeviceStats(displayName: string) {
+	const ubusResponse = await ubusCall({
+		displayName,
+		params: ['network.device', 'status', {}]
+	});
+
+	if (!ubusResponse.success) {
+		logError({
+			displayName,
+			errorMessage: 'Failed to get network device status',
+			...ubusResponse
+		});
+		return {
+			success: false,
+			errorMessage: 'Something went wrong while getting the network device status.'
+		} as const;
+	}
+
+	const parsedUbusResponse = networkDeviceStatusSchema.safeParse(
+		ubusResponse.data
+	);
+	if (!parsedUbusResponse.success) {
+		logError({
+			displayName,
+			errorMessage: 'Failed to parse network device status response',
+			zodError: parsedUbusResponse.error,
+			...ubusResponse
+		});
+		return {
+			success: false,
+			errorMessage: 'Failed to parse ubus response'
+		} as const;
+	}
+
+	const devices = parsedUbusResponse.data.result[1];
+	const stats: {
+		[device: string]: { rxBytes: number; txBytes: number };
+	} = {};
+	for (const [device, info] of Object.entries(devices)) {
+		if (!info.statistics) continue;
+		stats[device] = {
+			rxBytes: info.statistics.rx_bytes,
+			txBytes: info.statistics.tx_bytes
+		};
+	}
+
+	return {
+		success: true,
+		data: stats
 	} as const;
 }
 

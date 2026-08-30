@@ -2,7 +2,9 @@ import { getRealTimeTraffic } from '@/lib/server/routerInterfaces';
 
 export async function GET(request: Request) {
 	try {
-		const device = new URL(request.url).searchParams.get('device');
+		const searchParams = new URL(request.url).searchParams;
+		const device = searchParams.get('device');
+		const displayName = searchParams.get('displayName') || undefined;
 		if (!device) {
 			return new Response(
 				JSON.stringify({
@@ -17,7 +19,7 @@ export async function GET(request: Request) {
 				}
 			);
 		}
-		const response = await getRealTimeTraffic(device);
+		const response = await getRealTimeTraffic(device, displayName);
 		if (!response.success) {
 			return new Response(JSON.stringify(response), {
 				status: 400,

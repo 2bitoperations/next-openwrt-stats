@@ -52,6 +52,21 @@ export function formatBytes(bytes: number, decimals = 2) {
 	return `${parseFloat((bytes / k ** i).toFixed(dm))} ${sizes[i]}`;
 }
 
+export function ipToSortableNumber(ip: string) {
+	const parts = ip.split('.').map(Number);
+	if (parts.length !== 4 || parts.some((p) => Number.isNaN(p))) return 0;
+	return parts[0] * 2 ** 24 + parts[1] * 2 ** 16 + parts[2] * 2 ** 8 + parts[3];
+}
+
+export function formatBitrate(bytesPerSecond: number) {
+	const bitsPerSecond = bytesPerSecond * 8;
+	if (bitsPerSecond < 1000) return `${bitsPerSecond.toFixed(0)} bps`;
+	if (bitsPerSecond < 1_000_000) return `${(bitsPerSecond / 1000).toFixed(1)} Kbps`;
+	if (bitsPerSecond < 1_000_000_000)
+		return `${(bitsPerSecond / 1_000_000).toFixed(2)} Mbps`;
+	return `${(bitsPerSecond / 1_000_000_000).toFixed(2)} Gbps`;
+}
+
 export const formatBand = (band: string | string[]) => {
 	if (Array.isArray(band)) {
 		return `${band.map((b) => b.replaceAll('2g', '2.4').replaceAll('5g', '5').replaceAll('6g', '6')).join(' / ')} GHz`;

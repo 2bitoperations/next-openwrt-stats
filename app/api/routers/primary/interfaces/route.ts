@@ -1,8 +1,10 @@
 import { getNetworkInterfaces } from '@/lib/server/routerInterfaces';
 
-export async function GET() {
+export async function GET(request: Request) {
 	try {
-		const response = await getNetworkInterfaces();
+		const displayName =
+			new URL(request.url).searchParams.get('displayName') || undefined;
+		const response = await getNetworkInterfaces(displayName);
 		if (!response.success) {
 			return new Response(JSON.stringify(response), {
 				status: 400,

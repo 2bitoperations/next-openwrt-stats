@@ -112,6 +112,10 @@ export async function getWifiAPs() {
 				if (wifiConfig['.type'] !== 'wifi-iface') {
 					continue;
 				}
+				if (!wifiConfig.ssid) {
+					// Mesh (802.11s) interfaces have no ssid - nothing to key an SSID-based view on.
+					continue;
+				}
 				const wifiConfigParent = allWifiConfigs.find(
 					(config) => wifiConfig.device === config['.name']
 				);

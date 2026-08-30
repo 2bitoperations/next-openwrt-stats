@@ -29,6 +29,32 @@ export async function getRouters() {
 	}
 }
 
+export type RoutersWithId = Awaited<ReturnType<typeof getRoutersWithId>>;
+export async function getRoutersWithId() {
+	try {
+		const allRouters = await db
+			.select({
+				id: routersTable.id,
+				displayName: routersTable.displayName,
+				isPrimary: routersTable.isPrimary
+			})
+			.from(routersTable);
+		return {
+			success: true,
+			data: allRouters
+		} as const;
+	} catch (error) {
+		logError({
+			errorMessage: 'DB query to get routers (with id) threw an error',
+			error
+		});
+		return {
+			success: false,
+			errorMessage: 'DB query to get routers threw an error'
+		} as const;
+	}
+}
+
 export async function getRouter(displayName: string) {
 	try {
 		const router = await db

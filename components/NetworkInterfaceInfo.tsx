@@ -66,7 +66,9 @@ export function NetworkInterfaceInfo() {
 							<div className="flex w-full items-center gap-2">
 								<span className="text-muted-foreground w-2/4">Uptime:</span>
 								<span className="ml-auto ">
-									{secondsToHumanReadable(activeDevice.uptime)}
+									{activeDevice.uptime !== undefined
+										? secondsToHumanReadable(activeDevice.uptime)
+										: '- - - -'}
 								</span>
 							</div>
 						</>

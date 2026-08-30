@@ -1,7 +1,7 @@
 'use client';
 import { RealTimeTraffic } from '@/lib/server/routerInterfaces';
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
 	ChartConfig,
 	ChartContainer,
@@ -12,6 +12,7 @@ import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 import { Card, CardContent, CardHeader } from './ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useNetwork } from '@/providers/networkContext';
+import { useActiveRouter } from '@/providers/activeRouterContext';
 import {
 	Dialog,
 	DialogContent,
@@ -43,16 +44,23 @@ export function RealtimeTraffic({ MAX_TRAFFIC }: { MAX_TRAFFIC: number }) {
 		Array<{ time: string; rx: number; tx: number }>
 	>([]);
 	const { activeDevice, error } = useNetwork();
+	const { activeRouter } = useActiveRouter();
+
+	useEffect(() => {
+		setTrafficHistory([]);
+	}, [activeRouter, activeDevice?.device || activeDevice?.l3_device]);
 
 	const realtimeTrafficQuery = useQuery({
-		queryKey: ['traffic'],
+		queryKey: ['traffic', activeRouter, activeDevice?.device || activeDevice?.l3_device],
 		queryFn: async () => {
 			if (!activeDevice) {
 				throw new Error('No interface selected' + error?.message);
 			}
 			const trafficData = await fetch(
 				'/api/routers/primary/realtime-traffic?device=' +
-					(activeDevice.device || activeDevice.l3_device)
+					(activeDevice.device || activeDevice.l3_device) +
+					'&displayName=' +
+					activeRouter
 			).then((res) => res.json() as Promise<RealTimeTraffic>);
 			if (!trafficData.success) {
 				throw new Error(trafficData.errorMessage);

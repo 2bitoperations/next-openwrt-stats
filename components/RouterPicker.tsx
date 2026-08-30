@@ -40,7 +40,6 @@ export function RouterPicker({
 							<button
 								onClick={() => {
 									setActiveDevice(router.displayName);
-									localStorage.setItem('activeRouter', router.displayName);
 									setIsOpen(false);
 								}}
 								key={router.displayName}

@@ -1,56 +1,21 @@
 'use client';
 import { getRouterInfo } from '@/app/api/routers/info/route';
-import { Routers } from '@/lib/server/router';
-import { isServer, useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader } from './ui/card';
 import { secondsToHumanReadable } from '@/lib/utils';
 import { RouterPicker } from './RouterPicker';
+import { useActiveRouter } from '@/providers/activeRouterContext';
 import { CloudDownloadIcon, RouterIcon, ServerIcon } from 'lucide-react';
 import { Button } from './ui/button';
 
 export function RouterInfo() {
-	const [activeRouter, setActiveRouter] = useState<string | undefined>(
-		undefined
-	);
-	const allRouters = useQuery({
-		queryKey: ['getRouters'],
-		queryFn: async () => {
-			const response = await fetch('/api/routers/all');
-			const data = (await response.json()) as Routers;
-			if (!data.success) {
-				throw new Error(data.errorMessage);
-			}
-			if (!data.data || data.data.length === 0) {
-				throw new Error('No routers found');
-			}
-			return data.data;
-		},
-		refetchOnWindowFocus: false,
-		refetchOnMount: false
-	});
-
-	useEffect(() => {
-		const savedRouter = localStorage.getItem('activeRouter');
-		if (savedRouter) {
-			setActiveRouter(savedRouter);
-		}
-	}, []);
-
-	useEffect(() => {
-		if (allRouters.data) {
-			const savedRouter = localStorage.getItem('activeRouter');
-			const savedRuterIsValid = allRouters.data.find(
-				(router) => router.displayName === savedRouter
-			);
-			if (savedRouter && savedRuterIsValid) {
-				setActiveRouter(savedRouter);
-			} else {
-				setActiveRouter(allRouters.data[0].displayName);
-				localStorage.setItem('activeRouter', allRouters.data[0].displayName);
-			}
-		}
-	}, [allRouters.dataUpdatedAt]);
+	const {
+		allRouters,
+		activeRouter,
+		setActiveRouter,
+		isLoading: allRoutersIsLoading,
+		error: allRoutersError
+	} = useActiveRouter();
 
 	const routerInfo = useQuery({
 		queryKey: ['getRouterInfo', activeRouter],
@@ -87,16 +52,16 @@ export function RouterInfo() {
 		staleTime: Infinity
 	});
 
-	if (routerInfo.isLoading || allRouters.isLoading) {
+	if (routerInfo.isLoading || allRoutersIsLoading) {
 		return <LoadingError activeRouter={activeRouter} />;
 	}
 
-	if (routerInfo.isError || allRouters.isError) {
+	if (routerInfo.isError || allRoutersError) {
 		return (
 			<LoadingError
 				error={
 					routerInfo.error?.message ||
-					allRouters.error?.message ||
+					allRoutersError?.message ||
 					'Somthing went wrong'
 				}
 			/>
@@ -115,9 +80,9 @@ export function RouterInfo() {
 								<CloudDownloadIcon className="ml-2 inline-block h-5 w-5" />
 							)}
 					</h3>
-					{allRouters.data && (
+					{allRouters && (
 						<RouterPicker
-							allRouters={allRouters.data}
+							allRouters={allRouters}
 							activeDevice={activeRouter}
 							setActiveDevice={setActiveRouter}
 						/>

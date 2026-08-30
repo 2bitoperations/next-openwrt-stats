@@ -84,19 +84,23 @@ export const routerInfoSchema = z.object({
 
 const networkInterface = z.object({
 	interface: z.string(),
-	l3_device: z.string(),
+	// An interface that's down (e.g. an unplugged/unconfigured wan port) omits
+	// l3_device, uptime, and ipv4-address entirely rather than sending empty values.
+	l3_device: z.string().optional(),
 	proto: z.string(),
 	up: z.boolean(),
-	uptime: z.number(),
+	uptime: z.number().optional(),
 	device: z.string().optional(),
 	'dns-server': z.array(z.string()).optional(),
-	'ipv4-address': z.array(
-		z.object({
-			address: z.string(),
-			mask: z.number(),
-			ptpaddress: z.string().optional()
-		})
-	)
+	'ipv4-address': z
+		.array(
+			z.object({
+				address: z.string(),
+				mask: z.number(),
+				ptpaddress: z.string().optional()
+			})
+		)
+		.optional()
 });
 
 export type NetworkInterface = z.infer<typeof networkInterface>;
@@ -112,6 +116,28 @@ export const getNetworkInterfacesSchema = z.object({
 			})
 		])
 		.optional()
+});
+
+const networkDeviceStatistics = z.object({
+	rx_bytes: z.number(),
+	tx_bytes: z.number(),
+	rx_packets: z.number(),
+	tx_packets: z.number()
+});
+
+export const networkDeviceStatusSchema = z.object({
+	jsonrpc: z.string(),
+	id: z.number(),
+	result: z.tuple([
+		z.literal(0),
+		z.record(
+			z.string(),
+			z.object({
+				up: z.boolean().optional(),
+				statistics: networkDeviceStatistics.optional()
+			})
+		)
+	])
 });
 
 export const getRealTimeStatsSchema = z.object({
@@ -173,7 +199,9 @@ export const wifiAPsLiveDataSchema = z.object({
 export const wifiConfig = z.object({
 	'.type': z.literal('wifi-iface'),
 	'.name': z.string(),
-	ssid: z.string(),
+	// Mesh (802.11s) interfaces have no ssid - they're identified by mesh_id instead.
+	ssid: z.string().optional(),
+	mode: z.string().optional(),
 	device: z.string(),
 	disabled: z.string().optional(),
 	key: z.string().optional(),
