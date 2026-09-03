@@ -6,8 +6,10 @@ import { LoaderCircle, RouterIcon } from 'lucide-react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
 import { formatBand, secondsToHumanReadable, wifiGenerationFullLabel } from '@/lib/utils';
 import { getRouterInfo } from '@/app/api/routers/info/route';
+import { GetWanFailoverState } from '@/app/api/wan-failover/state/route';
 import { WifiRadio } from '@/lib/server/wifiAPs';
 import { RadioHistoryDialog } from './RadioHistoryDialog';
+import { WanFailoverHistoryDialog } from './WanFailoverHistoryDialog';
 
 function radioModeLabel(radio: WifiRadio) {
 	if (radio.mode === 'mesh') return 'Mesh';
@@ -33,6 +35,10 @@ function useRadiosQuery() {
 	});
 }
 
+function secondsSince(timestamp: number) {
+	return Math.max(0, Math.floor(Date.now() / 1000) - timestamp);
+}
+
 export function AccessPoints() {
 	const { allRouters } = useActiveRouter();
 	const radiosQuery = useRadiosQuery();
@@ -48,6 +54,21 @@ export function AccessPoints() {
 				if (!data.success) throw new Error(data.errorMessage);
 				return data.data;
 			}
+		}))
+	});
+
+	const wanFailoverQueries = useQueries({
+		queries: (allRouters || []).map((router) => ({
+			queryKey: ['wanFailoverState', router.displayName],
+			queryFn: async () => {
+				const response = await fetch(
+					`/api/wan-failover/state?displayName=${router.displayName}`
+				);
+				const data = (await response.json()) as GetWanFailoverState;
+				if (!data.success) throw new Error(data.errorMessage);
+				return data.data;
+			},
+			refetchInterval: 15_000
 		}))
 	});
 
@@ -73,6 +94,7 @@ export function AccessPoints() {
 		<div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
 			{allRouters.map((router, i) => {
 				const info = routerInfoQueries[i];
+				const wanFailover = wanFailoverQueries[i];
 				const radios = (radiosByRouter[router.displayName] || []).sort((a, b) =>
 					a.band.localeCompare(b.band)
 				);
@@ -85,11 +107,34 @@ export function AccessPoints() {
 									<RouterIcon className="h-5 w-5" />
 									{router.displayName}
 								</span>
-								{router.isPrimary === 1 && (
-									<Badge variant="secondary" className="text-xs">
-										Primary
-									</Badge>
-								)}
+								<span className="flex items-center gap-1.5">
+									{router.isPrimary === 1 && (
+										<Badge variant="secondary" className="text-xs">
+											Primary
+										</Badge>
+									)}
+									{wanFailover?.data && (
+										<WanFailoverHistoryDialog displayName={router.displayName}>
+											<button>
+												<Badge
+													variant={
+														wanFailover.data.activeInterface === 'primary'
+															? 'default'
+															: 'destructive'
+													}
+													className="text-xs"
+													title={`Active for ${secondsToHumanReadable(
+														secondsSince(wanFailover.data.since)
+													)}`}
+												>
+													{wanFailover.data.activeInterface === 'primary'
+														? 'WAN: Starlink'
+														: 'WAN: T-Mobile'}
+												</Badge>
+											</button>
+										</WanFailoverHistoryDialog>
+									)}
+								</span>
 							</h3>
 						</CardHeader>
 						<CardContent>

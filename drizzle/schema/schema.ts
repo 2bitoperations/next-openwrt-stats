@@ -170,3 +170,27 @@ export const dhcpLeaseSnapshotTable = sqliteTable('dhcp_lease_snapshot', {
 	data: text().notNull(), // JSON: deduped array of all leases, all routers
 	updatedAt: int().notNull()
 });
+
+// Current WAN-failover state per router (only meaningful for a router
+// running the wan-failover.sh watchdog - see this project's NOTES.md). One
+// row per router, upserted every poll.
+export const wanFailoverStateTable = sqliteTable('wan_failover_state', {
+	routerId: int()
+		.primaryKey()
+		.references(() => routersTable.id),
+	activeInterface: text().notNull().$type<'primary' | 'backup'>(),
+	since: int().notNull(), // epoch seconds - when this interface became active
+	updatedAt: int().notNull()
+});
+
+// History of WAN-failover state transitions per router - one row per
+// change, not a dense time series. Mirrors presencesEventTable's role for
+// client roaming history.
+export const wanFailoverEventTable = sqliteTable('wan_failover_event', {
+	id: int().primaryKey({ autoIncrement: true }),
+	routerId: int()
+		.notNull()
+		.references(() => routersTable.id),
+	timestamp: int().notNull(), // epoch seconds
+	activeInterface: text().notNull().$type<'primary' | 'backup'>()
+});

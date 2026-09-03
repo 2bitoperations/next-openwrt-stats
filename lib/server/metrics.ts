@@ -6,6 +6,8 @@ import {
 	metricSeriesTable,
 	routerSnapshotTable,
 	wifiRadioSnapshotTable,
+	wanFailoverStateTable,
+	wanFailoverEventTable,
 	type MetricTier
 } from '@/drizzle/schema/schema';
 import { and, avg, eq, gte, inArray, lte, max, min, sql } from 'drizzle-orm';
@@ -16,6 +18,7 @@ import { getDhcpDevices } from './dhcpDevices';
 import { ubusBatchCall } from './ubusCalls';
 import { routerInfoSchema } from '@/types/ubusCalls';
 import { logError } from '../client/errorLog';
+import { fetchWanFailoverState, type WanFailoverState } from './wanFailover';
 
 const RAW_RETENTION_SECONDS = 5 * 60;
 const TIER_1M_RETENTION_SECONDS = 7 * 24 * 60 * 60;
@@ -25,6 +28,7 @@ const TIER_5M_RETENTION_SECONDS = 90 * 24 * 60 * 60;
 const CLIENT_POLL_EVERY_N_TICKS = 5; // collector runs every 1s, clients/radios polled every 5s
 const RADIO_CONFIG_EVERY_N_TICKS = 10; // wifi radio config + dhcp leases every ~10s
 const ROUTER_INFO_EVERY_N_TICKS = 30; // uptime/load/mem every ~30s
+const WAN_FAILOVER_EVERY_N_TICKS = 20; // active-WAN state every ~20s - the router's own watchdog already does the real 5s/15s work, this just mirrors it
 const PRUNE_EVERY_N_TICKS = 60; // raw retention is 5 minutes, pruning once/minute is plenty
 const MAX_CATCHUP_BUCKETS = 120;
 
@@ -380,6 +384,18 @@ async function fetchRouterSnapshotRows(routers: RouterRow[]) {
 	return results;
 }
 
+async function fetchWanFailoverStateRows(routers: RouterRow[]) {
+	const results: { routerId: number; state: WanFailoverState }[] = [];
+	await Promise.all(
+		routers.map(async (router) => {
+			const response = await fetchWanFailoverState(router.displayName);
+			if (!response.success || !response.data) return;
+			results.push({ routerId: router.id, state: response.data });
+		})
+	);
+	return results;
+}
+
 // ---- Write phase: pure DB, all wrapped in one transaction per tick so the
 // whole batch fsyncs once instead of once per statement. ----
 
@@ -519,6 +535,12 @@ export async function collectTick() {
 			routerSnapshotRows = await fetchRouterSnapshotRows(routers.data);
 		}
 
+		let wanFailoverRows: Awaited<ReturnType<typeof fetchWanFailoverStateRows>> =
+			[];
+		if (tickCount % WAN_FAILOVER_EVERY_N_TICKS === 0) {
+			wanFailoverRows = await fetchWanFailoverStateRows(routers.data);
+		}
+
 		let clientRadioRows: PendingRow[] = [];
 		if (tickCount % CLIENT_POLL_EVERY_N_TICKS === 0) {
 			clientRadioRows = await computeClientAndRadioSampleRows(
@@ -563,6 +585,42 @@ export async function collectTick() {
 					.onConflictDoUpdate({
 						target: routerSnapshotTable.routerId,
 						set: { data: row.data, updatedAt: nowSec }
+					});
+			}
+
+			for (const row of wanFailoverRows) {
+				const existing = await tx
+					.select({ since: wanFailoverStateTable.since })
+					.from(wanFailoverStateTable)
+					.where(eq(wanFailoverStateTable.routerId, row.routerId))
+					.limit(1);
+
+				// The watchdog's own "since" only moves on a real transition, so a
+				// changed value here (or no prior row at all) is exactly a new event
+				// - not a decision this collector has to make on its own.
+				if (!existing.length || existing[0].since !== row.state.since) {
+					await tx.insert(wanFailoverEventTable).values({
+						routerId: row.routerId,
+						timestamp: row.state.since,
+						activeInterface: row.state.activeInterface
+					});
+				}
+
+				await tx
+					.insert(wanFailoverStateTable)
+					.values({
+						routerId: row.routerId,
+						activeInterface: row.state.activeInterface,
+						since: row.state.since,
+						updatedAt: nowSec
+					})
+					.onConflictDoUpdate({
+						target: wanFailoverStateTable.routerId,
+						set: {
+							activeInterface: row.state.activeInterface,
+							since: row.state.since,
+							updatedAt: nowSec
+						}
 					});
 			}
 
@@ -809,6 +867,30 @@ export async function getCachedDhcpLeases() {
 		return {
 			success: false,
 			errorMessage: 'Failed to read cached dhcp leases'
+		} as const;
+	}
+}
+
+export type CachedWanFailoverState = Awaited<
+	ReturnType<typeof getCachedWanFailoverState>
+>;
+export async function getCachedWanFailoverState(routerId: number) {
+	try {
+		const row = await db
+			.select()
+			.from(wanFailoverStateTable)
+			.where(eq(wanFailoverStateTable.routerId, routerId))
+			.limit(1);
+		if (!row.length) {
+			// Not an error - this router may simply not run the watchdog.
+			return { success: true, data: null } as const;
+		}
+		return { success: true, data: row[0] } as const;
+	} catch (error) {
+		logError({ errorMessage: 'Failed to read cached WAN failover state', error });
+		return {
+			success: false,
+			errorMessage: 'Failed to read cached WAN failover state'
 		} as const;
 	}
 }
