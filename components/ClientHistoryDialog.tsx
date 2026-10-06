@@ -7,7 +7,7 @@ import {
 	DialogTitle,
 	DialogTrigger
 } from '@/components/ui/dialog';
-import { BandwidthHistoryChart } from './BandwidthHistoryChart';
+import { BandwidthHistoryChart, RANGE_OPTIONS, RangePicker } from './BandwidthHistoryChart';
 import { SignalHistoryChart } from './SignalHistoryChart';
 
 export function ClientHistoryDialog({
@@ -22,6 +22,10 @@ export function ClientHistoryDialog({
 	children: React.ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
+	const [rangeSeconds, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
+	const chartClass = 'aspect-auto h-[160px] w-full sm:h-[200px]';
+	const noSplit =
+		'No LAN / Internet breakdown yet - needs macacct 2+ on the node this client is attached to';
 
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
@@ -31,15 +35,44 @@ export function ClientHistoryDialog({
 					<DialogTitle>{clientName || clientMac} — History</DialogTitle>
 				</DialogHeader>
 				<div className="space-y-6">
-					<div>
-						<h4 className="text-muted-foreground mb-1 text-sm font-medium">
-							Traffic
-						</h4>
-						<BandwidthHistoryChart
-							scope="client"
-							metricKey={clientMac}
-							className="aspect-auto h-[200px] w-full sm:h-[260px]"
-						/>
+					<div className="space-y-4">
+						<div className="flex items-center justify-between">
+							<h4 className="text-muted-foreground text-sm font-medium">Traffic</h4>
+							<RangePicker rangeSeconds={rangeSeconds} setRangeSeconds={setRangeSeconds} />
+						</div>
+						<div>
+							<h5 className="text-muted-foreground mb-1 text-xs">Total</h5>
+							<BandwidthHistoryChart
+								scope="client"
+								metricKey={clientMac}
+								rangeSeconds={rangeSeconds}
+								className={chartClass}
+							/>
+						</div>
+						<div>
+							<h5 className="text-muted-foreground mb-1 text-xs">
+								LAN (to/from other devices on the network)
+							</h5>
+							<BandwidthHistoryChart
+								scope="client_lan"
+								metricKey={clientMac}
+								rangeSeconds={rangeSeconds}
+								emptyMessage={noSplit}
+								className={chartClass}
+							/>
+						</div>
+						<div>
+							<h5 className="text-muted-foreground mb-1 text-xs">
+								Internet (to/from the router)
+							</h5>
+							<BandwidthHistoryChart
+								scope="client_wan"
+								metricKey={clientMac}
+								rangeSeconds={rangeSeconds}
+								emptyMessage={noSplit}
+								className={chartClass}
+							/>
+						</div>
 					</div>
 					<div>
 						<h4 className="text-muted-foreground mb-1 text-sm font-medium">

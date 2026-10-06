@@ -80,6 +80,9 @@ export const prevClientsTable = sqliteTable('prev_clients', {
 export const metricScope = {
 	interface: 'interface',
 	client: 'client',
+	// Per-client LAN / Internet breakdown of `client` (macacct >= 2 only).
+	client_lan: 'client_lan',
+	client_wan: 'client_wan',
 	radio: 'radio'
 } as const;
 export type MetricScope = (typeof metricScope)[keyof typeof metricScope];

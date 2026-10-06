@@ -33,7 +33,8 @@ const WAN_FAILOVER_EVERY_N_TICKS = 20; // active-WAN state every ~20s - the rout
 const PRUNE_EVERY_N_TICKS = 60; // raw retention is 5 minutes, pruning once/minute is plenty
 const MAX_CATCHUP_BUCKETS = 120;
 
-type MetricScopeName = 'interface' | 'client' | 'radio';
+type MetricScopeName = 'interface' | 'client' | 'client_lan' | 'client_wan' | 'radio';
+export type ClientSplitScope = 'client_lan' | 'client_wan';
 
 // The `tx` parameter type from a `db.transaction(async (tx) => ...)` callback.
 type DbClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -133,7 +134,7 @@ async function getOrCreateSeriesId(
 type PendingRow = typeof metricSampleTable.$inferInsert;
 
 async function buildInterfaceRow(
-	scope: 'interface' | 'client',
+	scope: 'interface' | 'client' | ClientSplitScope,
 	routerId: number | null,
 	key: string,
 	timestamp: number,
@@ -304,6 +305,26 @@ async function computeClientAndRadioSampleRows(
 				wifi[mac]?.signal
 			)
 		);
+	}
+
+	// LAN / Internet breakdown (macacct >= 2 only): two more series per
+	// client, diffed independently, same reset handling.
+	for (const [mac, counters] of Object.entries(macacct)) {
+		if (!counters.lan || !counters.wan) continue;
+		for (const [scope, pair] of [
+			['client_lan', counters.lan],
+			['client_wan', counters.wan]
+		] as const) {
+			const key = seriesKey(scope, null, mac);
+			const prev = lastCounters.get(key);
+			lastCounters.set(key, { rx: pair.rx, tx: pair.tx, time: nowSec, source: 'macacct' });
+			if (!prev) continue;
+			const dt = nowSec - prev.time;
+			const drx = pair.rx - prev.rx;
+			const dtx = pair.tx - prev.tx;
+			if (dt <= 0 || drx < 0 || dtx < 0) continue;
+			rows.push(await buildInterfaceRow(scope, null, mac, nowSec, drx / dt, dtx / dt));
+		}
 	}
 
 	return rows;

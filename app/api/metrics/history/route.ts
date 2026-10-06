@@ -13,7 +13,13 @@ export async function GET(request: Request) {
 		const from = Number(searchParams.get('from')) || now - 3600;
 		const to = Number(searchParams.get('to')) || now;
 
-		if (scope !== 'interface' && scope !== 'client' && scope !== 'radio') {
+		if (
+			scope !== 'interface' &&
+			scope !== 'client' &&
+			scope !== 'client_lan' &&
+			scope !== 'client_wan' &&
+			scope !== 'radio'
+		) {
 			return new Response(
 				JSON.stringify({ success: false, errorMessage: 'Invalid scope' }),
 				{ status: 400, headers: { 'Content-Type': 'application/json' } }

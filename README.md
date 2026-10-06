@@ -146,7 +146,11 @@ collector picks **one** counter basis per client, in this order:
    uci commit macacct
    ```
    Source and design notes: `feed-heltec/macacct` in the heltec-halow-adapters
-   port tree.
+   port tree. From macacct 2 each client's traffic is also split into
+   **Internet** (the other end is the site router's MAC, detected from the
+   node's default route) and **LAN** (everything else); the client history
+   dialog shows Total / LAN / Internet charts. Planned next:
+   [per-peer LAN breakdown](docs/per-peer-lan-breakdown.md).
 2. **Wi-Fi station counters** (hostapd/iwinfo): used when no node reports the
    client via `macacct`. Wi-Fi only; counters reset when a client reassociates.
 3. **`nlbwmon`** (fallback): counts only routed traffic between a local and a

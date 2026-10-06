@@ -17,10 +17,14 @@ import { fileExecSchema } from '@/types/ubusCalls';
 //    and LAN-local traffic is never counted. Counters reset monthly.
 //
 // Both print `{"columns": [...], "data": [[...], ...]}` with mac / rx_bytes /
-// tx_bytes columns (rx = towards the client).
+// tx_bytes columns (rx = towards the client). macacct >= 2 also splits each
+// client's traffic into Internet (wan_*: other end is the site router's MAC)
+// and LAN (lan_* = total - wan, from the same frames).
 
 export type HostSource = 'macacct' | 'nlbw';
-type Totals = { [mac: string]: { rxBytes: number; txBytes: number } };
+type Pair = { rx: number; tx: number };
+export type HostCounters = { rxBytes: number; txBytes: number; lan?: Pair; wan?: Pair };
+type Totals = { [mac: string]: HostCounters };
 
 const COMMANDS: Record<HostSource, { command: string; params: string[] }> = {
 	macacct: { command: '/usr/sbin/macacct', params: ['show'] },
@@ -57,19 +61,24 @@ async function readTotals(
 	} catch {
 		return null;
 	}
-	const macIndex = output.columns?.indexOf('mac') ?? -1;
-	const rxIndex = output.columns?.indexOf('rx_bytes') ?? -1;
-	const txIndex = output.columns?.indexOf('tx_bytes') ?? -1;
+	const col = (name: string) => output.columns?.indexOf(name) ?? -1;
+	const macIndex = col('mac');
+	const rxIndex = col('rx_bytes');
+	const txIndex = col('tx_bytes');
 	if (macIndex === -1 || rxIndex === -1 || txIndex === -1) return null;
+	const split = ['lan_rx_bytes', 'lan_tx_bytes', 'wan_rx_bytes', 'wan_tx_bytes'].map(col);
+	const hasSplit = split.every((i) => i !== -1);
+	const num = (row: unknown[], i: number) => Number(row[i]) || 0;
 
 	const totals: Totals = {};
 	for (const row of output.data ?? []) {
 		const mac = String(row[macIndex]).toUpperCase();
 		if (mac === '00:00:00:00:00:00') continue;
-		totals[mac] = {
-			rxBytes: Number(row[rxIndex]) || 0,
-			txBytes: Number(row[txIndex]) || 0
-		};
+		totals[mac] = { rxBytes: num(row, rxIndex), txBytes: num(row, txIndex) };
+		if (hasSplit) {
+			totals[mac].lan = { rx: num(row, split[0]), tx: num(row, split[1]) };
+			totals[mac].wan = { rx: num(row, split[2]), tx: num(row, split[3]) };
+		}
 	}
 	return totals;
 }
@@ -108,6 +117,14 @@ export async function getHostTrafficTotals() {
 
 	const nowSec = Math.floor(Date.now() / 1000);
 	const bySource: Record<HostSource, Totals> = { macacct: {}, nlbw: {} };
+	// A MAC's LAN/Internet split is only kept if every router reporting that
+	// MAC provides one (mixed macacct versions during a rollout would
+	// otherwise make lan + wan != total).
+	const splitMissing = new Set<string>();
+	const addPair = (into: Pair | undefined, add: Pair): Pair => ({
+		rx: (into?.rx ?? 0) + add.rx,
+		tx: (into?.tx ?? 0) + add.tx
+	});
 	await Promise.all(
 		allRouters.data.map(async (router) => {
 			const result = await routerTotals(router.displayName, nowSec);
@@ -117,8 +134,19 @@ export async function getHostTrafficTotals() {
 				totals[mac] ??= { rxBytes: 0, txBytes: 0 };
 				totals[mac].rxBytes += t.rxBytes;
 				totals[mac].txBytes += t.txBytes;
+				if (t.lan && t.wan) {
+					totals[mac].lan = addPair(totals[mac].lan, t.lan);
+					totals[mac].wan = addPair(totals[mac].wan, t.wan);
+				} else {
+					splitMissing.add(`${result.source}|${mac}`);
+				}
 			}
 		})
 	);
+	for (const key of splitMissing) {
+		const [source, mac] = key.split('|') as [HostSource, string];
+		delete bySource[source][mac].lan;
+		delete bySource[source][mac].wan;
+	}
 	return { success: true, data: bySource } as const;
 }

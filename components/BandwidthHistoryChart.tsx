@@ -83,7 +83,7 @@ export function useMetricHistory({
 	combined,
 	rangeSeconds
 }: {
-	scope: 'interface' | 'client' | 'radio';
+	scope: 'interface' | 'client' | 'client_lan' | 'client_wan' | 'radio';
 	metricKey: string;
 	displayName?: string;
 	combined?: boolean;
@@ -124,17 +124,23 @@ export function BandwidthHistoryChart({
 	metricKey,
 	displayName,
 	combined,
-	className = 'aspect-auto h-[180px] w-full'
+	className = 'aspect-auto h-[180px] w-full',
+	rangeSeconds: controlledRange,
+	emptyMessage = 'No data yet'
 }: {
-	scope: 'interface' | 'client';
+	scope: 'interface' | 'client' | 'client_lan' | 'client_wan';
 	metricKey: string;
 	displayName?: string;
 	combined?: boolean;
 	className?: string;
+	// When given, the range is controlled by the parent (which renders its own
+	// RangePicker, e.g. to keep several charts on the same window) and this
+	// chart shows no picker of its own.
+	rangeSeconds?: number;
+	emptyMessage?: string;
 }) {
-	const [rangeSeconds, setRangeSeconds] = useState<number>(
-		RANGE_OPTIONS[1].seconds
-	);
+	const [ownRange, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
+	const rangeSeconds = controlledRange ?? ownRange;
 
 	const query = useMetricHistory({
 		scope,
@@ -157,12 +163,14 @@ export function BandwidthHistoryChart({
 
 	return (
 		<div className="space-y-2">
-			<div className="flex items-center justify-end">
-				<RangePicker
-					rangeSeconds={rangeSeconds}
-					setRangeSeconds={setRangeSeconds}
-				/>
-			</div>
+			{controlledRange === undefined && (
+				<div className="flex items-center justify-end">
+					<RangePicker
+						rangeSeconds={rangeSeconds}
+						setRangeSeconds={setRangeSeconds}
+					/>
+				</div>
+			)}
 			{query.isLoading ? (
 				<div className={`flex items-center justify-center ${className}`}>
 					<LoaderCircle className="h-6 w-6 animate-spin" />
@@ -177,7 +185,7 @@ export function BandwidthHistoryChart({
 				<div
 					className={`text-muted-foreground flex items-center justify-center text-sm ${className}`}
 				>
-					No data yet
+					{emptyMessage}
 				</div>
 			) : (
 				<ChartContainer config={chartConfig} className={className}>
