@@ -4,11 +4,14 @@ import { Line, LineChart, XAxis, YAxis } from 'recharts';
 import { ChartContainer } from './ui/chart';
 import { chartConfig } from './BandwidthHistoryChart';
 
+const WINDOW_SECONDS = 300;
+
 export function ClientSparkline({
 	points
 }: {
 	points?: { timestamp: number; rxAvg: number; txAvg: number }[];
 }) {
+	const windowEnd = Math.floor(Date.now() / 1000);
 	const data = (points || []).map((point) => ({
 		timestamp: point.timestamp,
 		rxAvg: point.rxAvg * 8,
@@ -29,7 +32,9 @@ export function ClientSparkline({
 				data={data}
 				margin={{ top: 2, right: 0, bottom: 2, left: 0 }}
 			>
-				<XAxis dataKey="timestamp" type="number" hide />
+				{/* Fixed last-5-minute window: a numeric axis otherwise starts at 0 and
+				    squeezes every epoch timestamp into the right edge. */}
+				<XAxis dataKey="timestamp" type="number" hide domain={[windowEnd - WINDOW_SECONDS, windowEnd]} />
 				<YAxis type="number" hide domain={[0, 'auto']} width={0} />
 				<Line
 					type="monotone"
