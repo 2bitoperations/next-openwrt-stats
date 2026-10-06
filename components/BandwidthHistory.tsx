@@ -60,6 +60,7 @@ function RouterBandwidthCard({
 						scope="interface"
 						metricKey="br-lan"
 						displayName={displayName}
+						towardDevices
 					/>
 				)}
 				{tab === 'breakdown' && (
@@ -72,10 +73,12 @@ function RouterBandwidthCard({
 
 function WholeNetworkCard({
 	title,
-	metricKey
+	metricKey,
+	towardDevices = false
 }: {
 	title: string;
 	metricKey: string;
+	towardDevices?: boolean;
 }) {
 	return (
 		<Card className="w-full">
@@ -86,7 +89,12 @@ function WholeNetworkCard({
 				</h3>
 			</CardHeader>
 			<CardContent>
-				<BandwidthHistoryChart scope="interface" metricKey={metricKey} combined />
+				<BandwidthHistoryChart
+					scope="interface"
+					metricKey={metricKey}
+					combined
+					towardDevices={towardDevices}
+				/>
 			</CardContent>
 		</Card>
 	);
@@ -119,7 +127,7 @@ export function BandwidthHistory() {
 				<WholeNetworkCard title="Combined WAN" metricKey="wan" />
 			)}
 			{availableKeys.data?.['br-lan'] && (
-				<WholeNetworkCard title="Combined LAN" metricKey="br-lan" />
+				<WholeNetworkCard title="Combined LAN" metricKey="br-lan" towardDevices />
 			)}
 			{availableKeys.data?.bat0 && (
 				<WholeNetworkCard title="Combined Mesh" metricKey="bat0" />

@@ -126,7 +126,8 @@ export function BandwidthHistoryChart({
 	combined,
 	className = 'aspect-auto h-[180px] w-full',
 	rangeSeconds: controlledRange,
-	emptyMessage = 'No data yet'
+	emptyMessage = 'No data yet',
+	towardDevices = false
 }: {
 	scope: 'interface' | 'client' | 'client_lan' | 'client_wan';
 	metricKey: string;
@@ -138,6 +139,10 @@ export function BandwidthHistoryChart({
 	// chart shows no picker of its own.
 	rangeSeconds?: number;
 	emptyMessage?: string;
+	// Interface counters are from the router's side. For a LAN-side interface
+	// (br-lan) its rx is what the devices sent, so to keep Download = data
+	// delivered to devices (as for clients and the WAN), swap rx/tx.
+	towardDevices?: boolean;
 }) {
 	const [ownRange, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
 	const rangeSeconds = controlledRange ?? ownRange;
@@ -153,8 +158,8 @@ export function BandwidthHistoryChart({
 	const chartData = (query.data || []).map((point) => ({
 		timestamp: point.timestamp,
 		time: timeTickFormat(point.timestamp, rangeSeconds),
-		rxAvg: point.rxAvg,
-		txAvg: point.txAvg
+		rxAvg: towardDevices ? point.txAvg : point.rxAvg,
+		txAvg: towardDevices ? point.rxAvg : point.txAvg
 	}));
 
 	const bucketSeconds = estimateBucketSeconds(chartData.map((p) => p.timestamp));
