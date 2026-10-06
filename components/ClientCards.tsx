@@ -546,7 +546,8 @@ function ClientCard({
 						<span>
 							{wifiData ? (
 								<>
-									{formatBytes(wifiData.tx.bytes)} /{' '}
+									{/* AP-side station counters: tx = to the client (download) */}
+									↓ {formatBytes(wifiData.tx.bytes)} / ↑{' '}
 									{formatBytes(wifiData.rx.bytes)}
 								</>
 							) : (

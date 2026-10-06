@@ -584,8 +584,12 @@ export async function getWifiClientsTraffic(ifnames: {
 								continue;
 							}
 							trafficStats[client.mac.toUpperCase()] = {
-								rxBytes: client.rx.bytes,
-								txBytes: client.tx.bytes,
+								// Station counters are from the AP's side: its rx is what the
+								// client sent (upload), its tx what it delivered to the client
+								// (download). rxBytes/txBytes here are from the client's side,
+								// like macacct and nlbwmon.
+								rxBytes: client.tx.bytes,
+								txBytes: client.rx.bytes,
 								signal: client.signal,
 								time: Date.now() / 1000
 							};
@@ -620,8 +624,9 @@ export async function getWifiClientsTraffic(ifnames: {
 								continue;
 							}
 							trafficStats[key.toUpperCase()] = {
-								rxBytes: client.bytes.rx,
-								txBytes: client.bytes.tx,
+								// AP-side counters (see above): swap to the client's side.
+								rxBytes: client.bytes.tx,
+								txBytes: client.bytes.rx,
 								signal: client.signal || -200,
 								time: Date.now() / 1000
 							};
