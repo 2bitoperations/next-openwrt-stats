@@ -129,3 +129,37 @@ After creating the file, restart the rpcd service:
 ```bash
 /etc/init.d/rpcd restart
 ```
+### Per-client traffic (wired and wireless)
+
+Client traffic history needs per-MAC byte counters from the routers/APs. The
+collector picks **one** counter basis per client, in this order:
+
+1. **`macacct`** (preferred): an OpenWrt package that counts every frame each
+   client sends/receives on a bridge (`br-lan`) with an nftables bridge table -
+   wired or Wi-Fi, internet or LAN-local, no conntrack. Each node only counts on
+   its client-facing ports (batman-adv `bat*` ports and any configured uplink
+   are "transit"), so every client is counted once, at the node it is attached
+   to. Install the package (it ships its own rpcd ACL), and on the node that
+   connects a mesh to the router mark the wired uplink as transit:
+   ```bash
+   uci add_list macacct.main.transit='eth0.1'   # that node's uplink port
+   uci commit macacct
+   ```
+   Source and design notes: `feed-heltec/macacct` in the heltec-halow-adapters
+   port tree.
+2. **Wi-Fi station counters** (hostapd/iwinfo): used when no node reports the
+   client via `macacct`. Wi-Fi only; counters reset when a client reassociates.
+3. **`nlbwmon`** (fallback): counts only routed traffic between a local and a
+   non-local network - nothing that is merely bridged and no LAN-local traffic,
+   so it is only meaningful on the router itself. Needs an extra ACL entry:
+   ```json
+   "file": { "/usr/sbin/nlbw -c json -g mac show": ["exec"] }
+   ```
+   (alongside `"ubus": { "file": ["exec"] }` in the `write` section above), and
+   `net.core.rmem_max=1048576` in `/etc/sysctl.conf` so its netlink buffer isn't
+   silently clamped.
+
+Each router is probed once for which of `macacct`/`nlbw` it has; a router with
+neither is re-probed every 5 minutes. Don't run `nlbwmon` and `macacct` for the
+same clients and expect them to add up - the collector never sums the two for
+one MAC (it uses `macacct`).

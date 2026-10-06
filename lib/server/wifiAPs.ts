@@ -1,8 +1,7 @@
 import 'server-only';
 import { getRouters } from './router';
-import { ubusBatchCall, ubusCall } from './ubusCalls';
+import { ubusBatchCall } from './ubusCalls';
 import {
-	fileExecSchema,
 	wifiAPsLiveDataSchema,
 	wifiClientsSchema,
 	wifiConfigSchema,
@@ -642,72 +641,4 @@ export async function getWifiClientsTraffic(ifnames: {
 				'Something went wrong while getting the wifi clients. Please see logs for more details'
 		} as const;
 	}
-}
-
-// Per-host (wired + wireless, IPv4 + IPv6) cumulative traffic totals from
-// nlbwmon, keyed by MAC. Counters reset monthly (nlbwmon's default
-// accounting period) - callers should diff against a previous poll the same
-// way interface/wifi counters are already handled, and treat a decrease as
-// a reset rather than an error.
-export type NlbwHostTotals = Awaited<ReturnType<typeof getNlbwHostTotals>>;
-export async function getNlbwHostTotals() {
-	const allRouters = await getRouters();
-	if (!allRouters.success) {
-		return allRouters;
-	}
-
-	const totals: { [mac: string]: { rxBytes: number; txBytes: number } } = {};
-
-	await Promise.all(
-		allRouters.data.map(async (router) => {
-			const response = await ubusCall({
-				displayName: router.displayName,
-				params: [
-					'file',
-					'exec',
-					{
-					command: '/usr/sbin/nlbw',
-					params: ['-c', 'json', '-g', 'mac', 'show']
-				}
-				]
-			});
-			if (!response.success) {
-				logError({
-					displayName: router.displayName,
-					errorMessage: 'Failed to exec nlbw show',
-					...response
-				});
-				return;
-			}
-			const parsed = fileExecSchema.safeParse(response.data);
-			if (!parsed.success || !parsed.data.result[1].stdout) {
-				// nlbwmon may simply not be installed on a given router - not an error.
-				return;
-			}
-			let output: { columns: string[]; data: any[][] };
-			try {
-				output = JSON.parse(parsed.data.result[1].stdout);
-			} catch {
-				logError({
-					displayName: router.displayName,
-					errorMessage: 'Failed to parse nlbw show JSON output'
-				});
-				return;
-			}
-			const macIndex = output.columns.indexOf('mac');
-			const rxIndex = output.columns.indexOf('rx_bytes');
-			const txIndex = output.columns.indexOf('tx_bytes');
-			if (macIndex === -1 || rxIndex === -1 || txIndex === -1) return;
-
-			for (const row of output.data) {
-				const mac = String(row[macIndex]).toUpperCase();
-				if (mac === '00:00:00:00:00:00') continue;
-				if (!totals[mac]) totals[mac] = { rxBytes: 0, txBytes: 0 };
-				totals[mac].rxBytes += Number(row[rxIndex]) || 0;
-				totals[mac].txBytes += Number(row[txIndex]) || 0;
-			}
-		})
-	);
-
-	return { success: true, data: totals } as const;
 }

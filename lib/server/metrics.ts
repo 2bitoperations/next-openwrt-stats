@@ -13,7 +13,8 @@ import {
 import { and, avg, eq, gte, inArray, lte, max, min, sql } from 'drizzle-orm';
 import { getRoutersWithId } from './router';
 import { getNetworkDeviceStats } from './routerInterfaces';
-import { getNlbwHostTotals, getWifiClientsTraffic, getWifiRadios } from './wifiAPs';
+import { getWifiClientsTraffic, getWifiRadios } from './wifiAPs';
+import { getHostTrafficTotals, type HostSource } from './hostTraffic';
 import { getDhcpDevices } from './dhcpDevices';
 import { ubusBatchCall } from './ubusCalls';
 import { routerInfoSchema } from '@/types/ubusCalls';
@@ -39,15 +40,15 @@ type DbClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 type RouterRow = { id: number; displayName: string; isPrimary: number };
 
-// `source` guards against diffing across a basis change - e.g. a client
-// roaming from wifi (hostapd's frame-level counters) to wired (nlbwmon's
-// routed-traffic counters), which are on completely different scales and
-// would produce a garbage delta if diffed against each other.
+// `source` guards against diffing across a basis change - e.g. a client whose
+// counters switch from hostapd's station counters to macacct's or nlbwmon's,
+// which count different things on different scales and would produce a
+// garbage delta if diffed against each other.
 type CounterState = {
 	rx: number;
 	tx: number;
 	time: number;
-	source?: 'wifi' | 'nlbw';
+	source?: 'wifi' | HostSource;
 };
 const lastCounters = new Map<string, CounterState>();
 const seriesIdCache = new Map<string, number>();
@@ -224,40 +225,14 @@ async function computeClientAndRadioSampleRows(
 	nowSec: number
 ): Promise<PendingRow[]> {
 	const rows: PendingRow[] = [];
-	const wifiMacs = new Set<string>();
+	let wifi: { [mac: string]: { rxBytes: number; txBytes: number; signal?: number } } = {};
 
 	if (Object.keys(cachedIfnames).length > 0) {
 		const routerIdByName = new Map(routers.map((r) => [r.displayName, r.id]));
 		const traffic = await getWifiClientsTraffic(cachedIfnames);
 
 		if (traffic.success) {
-			for (const [mac, data] of Object.entries(traffic.data)) {
-				wifiMacs.add(mac);
-				const key = seriesKey('client', null, mac);
-				const prev = lastCounters.get(key);
-				lastCounters.set(key, {
-					rx: data.rxBytes,
-					tx: data.txBytes,
-					time: nowSec,
-					source: 'wifi'
-				});
-				if (!prev || prev.source !== 'wifi') continue;
-				const dt = nowSec - prev.time;
-				const drx = data.rxBytes - prev.rx;
-				const dtx = data.txBytes - prev.tx;
-				if (dt <= 0 || drx < 0 || dtx < 0) continue;
-				rows.push(
-					await buildInterfaceRow(
-						'client',
-						null,
-						mac,
-						nowSec,
-						drx / dt,
-						dtx / dt,
-						data.signal
-					)
-				);
-			}
+			wifi = traffic.data;
 
 			for (const [displayName, radios] of Object.entries(traffic.perRadio)) {
 				const routerId = routerIdByName.get(displayName);
@@ -285,34 +260,50 @@ async function computeClientAndRadioSampleRows(
 		}
 	}
 
-	// Wired (and any other non-wifi) client traffic, via nlbwmon. Skip any
-	// MAC that already got a row from wifi data this tick - that traffic is
-	// already covered by hostapd's own counters, so using both would
-	// double-instrument the same number rather than add information.
-	const nlbwTotals = await getNlbwHostTotals();
-	if (nlbwTotals.success) {
-		for (const [mac, data] of Object.entries(nlbwTotals.data)) {
-			if (wifiMacs.has(mac)) continue;
-			const key = seriesKey('client', null, mac);
-			const prev = lastCounters.get(key);
-			lastCounters.set(key, {
-				rx: data.rxBytes,
-				tx: data.txBytes,
-				time: nowSec,
-				source: 'nlbw'
-			});
-			if (!prev || prev.source !== 'nlbw') continue;
-			const dt = nowSec - prev.time;
-			const drx = data.rxBytes - prev.rx;
-			const dtx = data.txBytes - prev.tx;
-			// A negative delta here means nlbwmon's monthly accounting period
-			// rolled over and its counters reset - same as an interface reboot,
-			// just skip this sample and pick back up next tick.
-			if (dt <= 0 || drx < 0 || dtx < 0) continue;
-			rows.push(
-				await buildInterfaceRow('client', null, mac, nowSec, drx / dt, dtx / dt)
-			);
-		}
+	// Per-client traffic: exactly one counter basis per client per tick, in
+	// order of fidelity (see hostTraffic.ts):
+	//   macacct - every frame the client sends/receives at the node it's
+	//             attached to (wired or wifi, LAN-local included), counted once
+	//   wifi    - hostapd station counters (wifi only; reset on reassociation)
+	//   nlbw    - nlbwmon (routed local<->non-local flows only)
+	// Signal strength still comes from wifi data whichever basis is used.
+	const hosts = await getHostTrafficTotals();
+	const macacct = hosts.success ? hosts.data.macacct : {};
+	const nlbw = hosts.success ? hosts.data.nlbw : {};
+	const macs = new Set([...Object.keys(macacct), ...Object.keys(wifi), ...Object.keys(nlbw)]);
+
+	for (const mac of macs) {
+		const [source, counters] = macacct[mac]
+			? (['macacct', macacct[mac]] as const)
+			: wifi[mac]
+				? (['wifi', wifi[mac]] as const)
+				: (['nlbw', nlbw[mac]] as const);
+		const key = seriesKey('client', null, mac);
+		const prev = lastCounters.get(key);
+		lastCounters.set(key, {
+			rx: counters.rxBytes,
+			tx: counters.txBytes,
+			time: nowSec,
+			source
+		});
+		if (!prev || prev.source !== source) continue;
+		const dt = nowSec - prev.time;
+		const drx = counters.rxBytes - prev.rx;
+		const dtx = counters.txBytes - prev.tx;
+		// A decrease means the counters reset (node reboot, wifi reassociation,
+		// nlbwmon's monthly rollover): skip this sample, resume next tick.
+		if (dt <= 0 || drx < 0 || dtx < 0) continue;
+		rows.push(
+			await buildInterfaceRow(
+				'client',
+				null,
+				mac,
+				nowSec,
+				drx / dt,
+				dtx / dt,
+				wifi[mac]?.signal
+			)
+		);
 	}
 
 	return rows;
