@@ -995,6 +995,58 @@ export async function getClientBandwidthSummary(windowSeconds: number) {
 	}
 }
 
+export async function getClientRecentSeries(windowSeconds: number) {
+	const now = Math.floor(Date.now() / 1000);
+	const from = now - windowSeconds;
+
+	try {
+		const rows = await db
+			.select({
+				mac: metricSeriesTable.key,
+				timestamp: metricSampleTable.timestamp,
+				rxAvg: metricSampleTable.rxAvg,
+				txAvg: metricSampleTable.txAvg
+			})
+			.from(metricSampleTable)
+			.innerJoin(
+				metricSeriesTable,
+				eq(metricSeriesTable.id, metricSampleTable.seriesId)
+			)
+			.where(
+				and(
+					eq(metricSeriesTable.scope, 'client'),
+					eq(metricSampleTable.tier, 'raw'),
+					gte(metricSampleTable.timestamp, from)
+				)
+			)
+			.orderBy(metricSampleTable.timestamp);
+
+		const data: {
+			[mac: string]: { timestamp: number; rxAvg: number; txAvg: number }[];
+		} = {};
+		for (const row of rows) {
+			if (!data[row.mac]) {
+				data[row.mac] = [];
+			}
+			data[row.mac].push({
+				timestamp: row.timestamp,
+				rxAvg: Number(row.rxAvg) || 0,
+				txAvg: Number(row.txAvg) || 0
+			});
+		}
+
+		return { success: true, data } as const;
+	} catch (error) {
+		logError({ errorMessage: 'Failed to get client recent series', error });
+		return {
+			success: false,
+			errorMessage: 'Failed to get client recent series'
+		} as const;
+	}
+}
+
+export type ClientRecentSeries = Awaited<ReturnType<typeof getClientRecentSeries>>;
+
 const LATEST_RATE_STALE_AFTER_SECONDS = 15;
 
 export type ClientLatestRates = Awaited<ReturnType<typeof getClientLatestRates>>;

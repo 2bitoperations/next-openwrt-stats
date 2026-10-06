@@ -28,7 +28,7 @@ export const RANGE_OPTIONS = [
 	{ label: '1y', seconds: 365 * 24 * 60 * 60 }
 ] as const;
 
-const chartConfig = {
+export const chartConfig = {
 	rxAvg: { label: 'Download', color: 'var(--chart-1)' },
 	txAvg: { label: 'Upload', color: 'var(--chart-2)' }
 } satisfies ChartConfig;

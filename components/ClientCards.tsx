@@ -35,8 +35,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
 import { ClientProtocolHoverCard } from './ClientProtocolHoverCard';
-import { Progress } from '@/components/ui/progress';
-import { ClientBandwidthSummary, ClientLatestRates } from '@/lib/server/metrics';
+import { ClientSparkline } from './ClientSparkline';
+import { ClientBandwidthSummary, ClientLatestRates, ClientRecentSeries } from '@/lib/server/metrics';
 import { WifiRadio } from '@/lib/server/wifiAPs';
 
 type WifiDataEntry = {
@@ -233,6 +233,17 @@ export default function ClientCards({
 		queryFn: async () => {
 			const res = await fetch('/api/metrics/client-latest-rates');
 			const data = (await res.json()) as ClientLatestRates;
+			if (!data.success) throw new Error(data.errorMessage);
+			return data.data;
+		},
+		refetchInterval: 5000
+	});
+
+	const clientRecentSeriesQuery = useQuery({
+		queryKey: ['clientRecentSeries'],
+		queryFn: async () => {
+			const res = await fetch('/api/metrics/client-recent-series');
+			const data = (await res.json()) as ClientRecentSeries;
 			if (!data.success) throw new Error(data.errorMessage);
 			return data.data;
 		},
@@ -450,6 +461,7 @@ export default function ClientCards({
 						key={device.macAddress}
 						wifiData={wifiClientsQuery.data?.[device.macAddress.toUpperCase()]}
 						rate={rates.get(device.macAddress.toUpperCase())}
+						recentSeries={clientRecentSeriesQuery.data?.[device.macAddress.toUpperCase()]}
 						presenceEnabled={presenceEnabled}
 						htmodeByRouterBand={htmodeByRouterBand}
 					/>
@@ -463,6 +475,7 @@ function ClientCard({
 	device,
 	wifiData,
 	rate,
+	recentSeries,
 	presenceEnabled,
 	htmodeByRouterBand
 }: {
@@ -473,6 +486,7 @@ function ClientCard({
 		leaseTime: number | boolean;
 	};
 	rate: Rate | undefined;
+	recentSeries?: { timestamp: number; rxAvg: number; txAvg: number }[];
 	wifiData: WifiDataEntry | undefined;
 	presenceEnabled: boolean;
 	htmodeByRouterBand: Map<string, string>;
@@ -516,22 +530,7 @@ function ClientCard({
 						presenceEnabled={presenceEnabled}
 					>
 						<div className="-m-1 cursor-pointer space-y-1.5 rounded-md p-1 pb-1 transition-colors hover:bg-white/5">
-							<div className="flex items-center gap-2">
-								<span className="text-muted-foreground w-14 text-xs">
-									Down
-								</span>
-								<Progress
-									className="h-1.5 flex-1"
-									value={Math.min(((rate?.rxMbps || 0) / 50) * 100, 100)}
-								/>
-							</div>
-							<div className="flex items-center gap-2">
-								<span className="text-muted-foreground w-14 text-xs">Up</span>
-								<Progress
-									className="h-1.5 flex-1"
-									value={Math.min(((rate?.txMbps || 0) / 50) * 100, 100)}
-								/>
-							</div>
+							<ClientSparkline points={recentSeries} />
 						</div>
 					</ClientHistoryDialog>
 					<p className="flex justify-between">
