@@ -67,8 +67,16 @@ export function formatBitrate(bytesPerSecond: number) {
 	return `${(bitsPerSecond / 1_000_000_000).toFixed(2)} Gbps`;
 }
 
+// Radios that have no htmode (802.11ah HaLow, band 's1g': width follows the
+// channel) get 'S1G' so they still render; anything else unknown stays visible
+// as such rather than being silently dropped.
+export function radioHtmode(band: string, htmode: string | undefined): string {
+	return htmode ?? (band === 's1g' ? 'S1G' : 'unknown');
+}
+
 export function wifiGenerationLabel(htmode: string | undefined, band?: string) {
 	if (!htmode) return undefined;
+	if (htmode === 'S1G') return 'HaLow';
 	if (htmode.startsWith('EHT')) return '7';
 	if (htmode.startsWith('HE')) return band === '6g' ? '6E' : '6';
 	if (htmode.startsWith('VHT')) return '5';
@@ -78,6 +86,7 @@ export function wifiGenerationLabel(htmode: string | undefined, band?: string) {
 
 export function wifiGenerationFullLabel(htmode: string | undefined) {
 	if (!htmode) return 'Unknown';
+	if (htmode === 'S1G') return 'Wi-Fi HaLow (ah)';
 	if (htmode.startsWith('EHT')) return 'Wi-Fi 7 (be)';
 	if (htmode.startsWith('HE')) return 'Wi-Fi 6/6E (ax)';
 	if (htmode.startsWith('VHT')) return 'Wi-Fi 5 (ac)';
@@ -85,8 +94,9 @@ export function wifiGenerationFullLabel(htmode: string | undefined) {
 	return htmode || 'Unknown';
 }
 
-export const formatBand = (band: string | string[]) => {
+export const formatBand = (band: string | string[]): string => {
 	if (Array.isArray(band)) {
+		if (band.includes('s1g')) return band.map((b) => formatBand(b)).join(' / ');
 		return `${band.map((b) => b.replaceAll('2g', '2.4').replaceAll('5g', '5').replaceAll('6g', '6')).join(' / ')} GHz`;
 	}
 	switch (band) {
@@ -96,6 +106,8 @@ export const formatBand = (band: string | string[]) => {
 			return '5 GHz';
 		case '6g':
 			return '6 GHz';
+		case 's1g':
+			return '900 MHz';
 		default:
 			return band;
 	}

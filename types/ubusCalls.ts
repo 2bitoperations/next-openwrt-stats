@@ -183,7 +183,9 @@ export const dhcpDevicesSchema = z.object({
 const wifiAPLiveData = z.object({
 	config: z.object({
 		band: z.string(),
-		htmode: z.string()
+		// Radios without HT/VHT/HE/EHT modes (e.g. 802.11ah HaLow, band 's1g') have
+		// no htmode at all - normalize with radioHtmode() from lib/utils.
+		htmode: z.string().optional()
 	}),
 	interfaces: z
 		.array(
@@ -227,7 +229,7 @@ export const wifiConfigParent = z.object({
 	'.name': z.string(),
 	channel: z.string(),
 	band: z.string(),
-	htmode: z.string(),
+	htmode: z.string().optional(), // absent on HaLow ('s1g') radios - see radioHtmode()
 	txpower: z.string().optional(),
 	disabled: z.string().optional(),
 	country: z.string().optional()

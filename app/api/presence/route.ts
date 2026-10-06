@@ -13,6 +13,7 @@ import { getRouters } from '@/lib/server/router';
 import { ubusCall } from '@/lib/server/ubusCalls';
 import { wifiAPsLiveDataSchema } from '@/types/ubusCalls';
 import { logError } from '@/lib/client/errorLog';
+import { radioHtmode } from '@/lib/utils';
 export const dynamic = 'force-dynamic';
 
 type PresenceEvent = {
@@ -231,7 +232,7 @@ async function getIfnames() {
 						wifiIfnames[router.displayName].push({
 							ssid: wifiInterface.iwinfo.ssid,
 							band: wifiData.config.band,
-							htmode: wifiData.config.htmode,
+							htmode: radioHtmode(wifiData.config.band, wifiData.config.htmode),
 							channel: wifiInterface.iwinfo.channel || 0,
 							ifname: wifiInterface.ifname
 						});

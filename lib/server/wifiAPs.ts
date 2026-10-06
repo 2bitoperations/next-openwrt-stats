@@ -8,6 +8,7 @@ import {
 	wifiHostapdClientsSchema
 } from '@/types/ubusCalls';
 import { logError } from '../client/errorLog';
+import { radioHtmode } from '../utils';
 
 export type WifiAPs = Awaited<ReturnType<typeof getWifiAPs>>;
 export async function getWifiAPs() {
@@ -137,7 +138,7 @@ export async function getWifiAPs() {
 						Number(wifiConfigParent.channel) ||
 						0,
 					band: wifiConfigParent.band,
-					htmode: wifiConfigParent.htmode,
+					htmode: radioHtmode(wifiConfigParent.band, wifiConfigParent.htmode),
 					txpower:
 						wifiAPLiveData?.iwinfo?.txpower ||
 						Number(wifiConfigParent.txpower) ||
@@ -165,7 +166,9 @@ export async function getWifiAPs() {
 						0
 				);
 				wifiAPsOverview[wifiConfig.ssid].band.add(wifiConfigParent.band);
-				wifiAPsOverview[wifiConfig.ssid].htmode.add(wifiConfigParent.htmode);
+				wifiAPsOverview[wifiConfig.ssid].htmode.add(
+					radioHtmode(wifiConfigParent.band, wifiConfigParent.htmode)
+				);
 				wifiAPsOverview[wifiConfig.ssid].txpower.add(
 					wifiAPLiveData?.iwinfo?.txpower ||
 						Number(wifiConfigParent.txpower) ||
@@ -331,7 +334,7 @@ export async function getWifiRadios() {
 					configSection: wifiConfig['.name'],
 					mode: wifiConfig.mode || 'ap',
 					band: wifiConfigParent.band,
-					htmode: wifiConfigParent.htmode,
+					htmode: radioHtmode(wifiConfigParent.band, wifiConfigParent.htmode),
 					channel:
 						wifiAPLiveData?.iwinfo?.channel ||
 						Number(wifiConfigParent.channel) ||
