@@ -105,12 +105,19 @@ the average since the previous one), with a 30 s lead-in; 60 s baseline subtract
   (First evaluation read 60-88 MB: a bug in the test's integrator - forward-held
   samples / no lead-in - not in the dashboard; the relay's raw counters confirmed
   +54.6 MB for a 50 MB copy.)
-- T3 FLAG: over 10 min, LAN internet 308.1 MB vs WAN rx+tx 268.7 MB (+14.7 %, expected
-  slightly BELOW WAN). Cause measured on swamp-ap-main with temporary nft counters:
-  devnull <-> main HTTP (the dashboard polling main's ubus) 2.57 MB/min + LAN DNS to main
-  0.13 MB/min (~27 MB / 10 min) - frames to the router's MAC count as "internet" even when
-  they are for the router itself. Open: refine macacct (internet only when the IP peer is
-  not private/link-local).
+- T3 FLAG -> PASS after macacct 2-r3. First run: LAN internet 308.1 MB vs WAN rx+tx 268.7 MB
+  over 10 min (+14.7 %); temporary nft counters on swamp-ap-main showed devnull <-> main
+  HTTP (the dashboard polling main's ubus) 2.57 MB/min + LAN DNS 0.13 MB/min counted as
+  "internet" (frames to the router's MAC). macacct 2-r3: internet only when the IP peer is
+  public (not 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16, 127/8, multicast,
+  broadcast; not fc00::/7, fe80::/10, ff00::/8, ::1). Verified on kitchen (20 MB download
+  -> wan_rx +20.86 MB; 1.8 MB from main's LuCI -> lan). Rerun (10 min, all reachable nodes
+  on 2-r3): LAN internet 376.8 MB vs WAN 394.8 MB = 95.4 % (slightly below WAN, as
+  expected: router-originated traffic + overhead appear only on WAN).
 - T4 PASS: type check; no new error types in the dashboard log (only the two unplugged lab
   HD01s, throttled); Combined LAN shows LAN-local / Internet + share; Combined Mesh
   stacked per router; AP cards open on "Per interface".
+- Later: Combined LAN drawn as stacked areas (LAN-local + Internet = total). A first
+  version wrapped the series in React fragments, which recharts 2 ignores - every
+  BandwidthHistoryChart rendered no series for ~5 min; fixed (5d12f18) and checked in a
+  browser.
