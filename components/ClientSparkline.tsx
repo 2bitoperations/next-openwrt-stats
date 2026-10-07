@@ -7,9 +7,12 @@ import { chartConfig } from './BandwidthHistoryChart';
 const WINDOW_SECONDS = 300;
 
 export function ClientSparkline({
-	points
+	points,
+	yMaxBits
 }: {
 	points?: { timestamp: number; rxAvg: number; txAvg: number }[];
+	// Shared y-axis top in bits/s, so every card's sparkline is on the same scale.
+	yMaxBits?: number;
 }) {
 	const windowEnd = Math.floor(Date.now() / 1000);
 	const data = (points || []).map((point) => ({
@@ -35,7 +38,13 @@ export function ClientSparkline({
 				{/* Fixed last-5-minute window: a numeric axis otherwise starts at 0 and
 				    squeezes every epoch timestamp into the right edge. */}
 				<XAxis dataKey="timestamp" type="number" hide domain={[windowEnd - WINDOW_SECONDS, windowEnd]} />
-				<YAxis type="number" hide domain={[0, 'auto']} width={0} />
+				<YAxis
+					type="number"
+					hide
+					domain={yMaxBits ? [0, yMaxBits] : [0, 'auto']}
+					allowDataOverflow
+					width={0}
+				/>
 				<Line
 					type="monotone"
 					dataKey="rxAvg"

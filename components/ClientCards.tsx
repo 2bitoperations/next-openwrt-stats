@@ -17,6 +17,7 @@ import {
 	calcMbps,
 	cn,
 	formatBand,
+	formatBitrate,
 	formatBytes,
 	ipToSortableNumber,
 	secondsToHumanReadable,
@@ -250,6 +251,21 @@ export default function ClientCards({
 		refetchInterval: 5000
 	});
 
+	// One y-axis scale for every card's sparkline: the highest single download or
+	// upload sample of any listed client in the 5-minute window (bits/s), so the
+	// mini-graphs are comparable across cards.
+	const sparkMaxBits = useMemo(() => {
+		const series = clientRecentSeriesQuery.data;
+		if (!series || !dhcpDevicesQuery.data) return 0;
+		let maxBytes = 0;
+		for (const device of dhcpDevicesQuery.data) {
+			for (const p of series[device.macAddress.toUpperCase()] ?? []) {
+				maxBytes = Math.max(maxBytes, p.rxAvg, p.txAvg);
+			}
+		}
+		return maxBytes * 8;
+	}, [clientRecentSeriesQuery.data, dhcpDevicesQuery.data]);
+
 	// Rates are computed here (not per-card) so the list can sort by bandwidth.
 	const prevTrafficRef = useRef<
 		Map<string, { rxBytes: number; txBytes: number; time: number }>
@@ -451,6 +467,9 @@ export default function ClientCards({
 					)}
 				</Button>
 				<span className="text-muted-foreground ml-auto text-xs">
+					{sparkMaxBits > 0 && (
+						<span className="mr-3">mini-graph scale: 0–{formatBitrate(sparkMaxBits / 8)}</span>
+					)}
 					{filteredSortedDevices.length} of {dhcpDevicesQuery.data?.length || 0}
 				</span>
 			</div>
@@ -462,6 +481,7 @@ export default function ClientCards({
 						wifiData={wifiClientsQuery.data?.[device.macAddress.toUpperCase()]}
 						rate={rates.get(device.macAddress.toUpperCase())}
 						recentSeries={clientRecentSeriesQuery.data?.[device.macAddress.toUpperCase()]}
+						sparkMaxBits={sparkMaxBits}
 						presenceEnabled={presenceEnabled}
 						htmodeByRouterBand={htmodeByRouterBand}
 					/>
@@ -476,6 +496,7 @@ function ClientCard({
 	wifiData,
 	rate,
 	recentSeries,
+	sparkMaxBits,
 	presenceEnabled,
 	htmodeByRouterBand
 }: {
@@ -487,6 +508,7 @@ function ClientCard({
 	};
 	rate: Rate | undefined;
 	recentSeries?: { timestamp: number; rxAvg: number; txAvg: number }[];
+	sparkMaxBits?: number;
 	wifiData: WifiDataEntry | undefined;
 	presenceEnabled: boolean;
 	htmodeByRouterBand: Map<string, string>;
@@ -528,7 +550,7 @@ function ClientCard({
 						presenceEnabled={presenceEnabled}
 					>
 						<div className="-m-1 cursor-pointer space-y-1.5 rounded-md p-1 pb-1 transition-colors hover:bg-white/5">
-							<ClientSparkline points={recentSeries} />
+							<ClientSparkline points={recentSeries} yMaxBits={sparkMaxBits} />
 						</div>
 					</ClientHistoryDialog>
 					<p className="flex justify-between">
