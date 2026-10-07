@@ -265,13 +265,7 @@ export async function login({
 	};
 
 	try {
-		const response = await fetch(routerIP + '/ubus', {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify(ubusObject)
-		});
+		const response = await routerFetch(routerIP, JSON.stringify(ubusObject));
 
 		const ubusResponse = await response.json();
 		const parsedUbusResponse = loginSchema.safeParse(ubusResponse);
@@ -399,18 +393,55 @@ type SendUbusReturnType = Promise<
 			rawResponse?: object;
 	  }
 >;
-async function sendUbus(
-	routerIP: string,
-	ubusObject: object,
-	timeout = 2000
-): SendUbusReturnType {
+
+// ---- Every HTTP request to a router goes through routerFetch() ----
+// A router that is offline used to stall everything: requests had no timeout
+// (each waited out the OS connect timeout), and the 1 s collector polls all
+// routers together and skips ticks while one is still running - so one dead AP
+// delayed or froze every chart. Now: a per-request timeout, and after a
+// connection-level failure (unreachable / timed out - not a bad reply) the
+// router is skipped instantly for a backoff that doubles from 15 s to 2 min;
+// the first successful request clears it.
+const ROUTER_TIMEOUT_MS = 8000;
+const BACKOFF_MIN_MS = 15_000;
+const BACKOFF_MAX_MS = 120_000;
+const routerBackoff = new Map<string, { until: number; delay: number }>();
+
+class RouterUnreachableError extends Error {}
+
+async function routerFetch(routerIP: string, body: string): Promise<Response> {
+	const now = Date.now();
+	const backoff = routerBackoff.get(routerIP);
+	if (backoff && now < backoff.until) {
+		throw new RouterUnreachableError(
+			`router ${routerIP} unreachable, retrying in ${Math.ceil((backoff.until - now) / 1000)}s`
+		);
+	}
 	try {
 		const response = await fetch(routerIP + '/ubus', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(ubusObject)
-			// signal: AbortSignal.timeout(timeout)
+			body,
+			signal: AbortSignal.timeout(ROUTER_TIMEOUT_MS)
 		});
+		routerBackoff.delete(routerIP);
+		return response;
+	} catch (error) {
+		const delay = Math.min(
+			backoff ? backoff.delay * 2 : BACKOFF_MIN_MS,
+			BACKOFF_MAX_MS
+		);
+		routerBackoff.set(routerIP, { until: Date.now() + delay, delay });
+		throw error;
+	}
+}
+
+async function sendUbus(
+	routerIP: string,
+	ubusObject: object
+): SendUbusReturnType {
+	try {
+		const response = await routerFetch(routerIP, JSON.stringify(ubusObject));
 		const jsonResponse = await response.json();
 		const parsedResponse = validResponseSchema.safeParse(jsonResponse);
 		if (!parsedResponse.success) {
@@ -484,16 +515,10 @@ type SendUbusBatchReturnType = Promise<
 >;
 async function sendUbusBatch(
 	routerIP: string,
-	calls: object[],
-	timeout = 2000
+	calls: object[]
 ): SendUbusBatchReturnType {
 	try {
-		const response = await fetch(routerIP + '/ubus', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(calls)
-			// signal: AbortSignal.timeout(timeout)
-		});
+		const response = await routerFetch(routerIP, JSON.stringify(calls));
 		const jsonResponse = await response.json();
 		const parsedResponse = batchResponseSchema.safeParse(jsonResponse);
 		if (!parsedResponse.success) {

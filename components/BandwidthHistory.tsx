@@ -23,7 +23,7 @@ function RouterBandwidthCard({
 	displayName: string;
 	isPrimary: boolean;
 }) {
-	const [tab, setTab] = useState<Tab>(isPrimary ? 'wan' : 'lan');
+	const [tab, setTab] = useState<Tab>('breakdown');
 
 	return (
 		<Card className="w-full">
