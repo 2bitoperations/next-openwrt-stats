@@ -10,6 +10,7 @@ import {
 } from './ui/chart';
 import { LoaderCircle } from 'lucide-react';
 import { RANGE_OPTIONS, RangePicker, useMetricHistory } from './BandwidthHistoryChart';
+import { useTimeRange } from '@/providers/timeRangeContext';
 import { formatBand } from '@/lib/utils';
 import { PresenceSegments } from '@/app/api/presence/[mac]/segments/route';
 
@@ -54,15 +55,20 @@ function timeTickFormat(timestamp: number, rangeSeconds: number) {
 export function SignalHistoryChart({
 	clientMac,
 	presenceEnabled = false,
-	className = 'aspect-auto h-[180px] w-full'
+	className = 'aspect-auto h-[180px] w-full',
+	rangeSeconds: controlledRange
 }: {
 	clientMac: string;
 	presenceEnabled?: boolean;
 	className?: string;
+	rangeSeconds?: number;
 }) {
-	const [rangeSeconds, setRangeSeconds] = useState<number>(
+	const [ownRange, setRangeSeconds] = useState<number>(
 		RANGE_OPTIONS[1].seconds
 	);
+	const timeRange = useTimeRange();
+	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;
+	const showOwnPicker = controlledRange === undefined && !timeRange;
 
 	const query = useMetricHistory({
 		scope: 'client',
@@ -119,12 +125,14 @@ export function SignalHistoryChart({
 
 	return (
 		<div className="space-y-2">
-			<div className="flex items-center justify-end">
-				<RangePicker
-					rangeSeconds={rangeSeconds}
-					setRangeSeconds={setRangeSeconds}
-				/>
-			</div>
+			{showOwnPicker && (
+				<div className="flex items-center justify-end">
+					<RangePicker
+						rangeSeconds={rangeSeconds}
+						setRangeSeconds={setRangeSeconds}
+					/>
+				</div>
+			)}
 			{query.isLoading ? (
 				<div className={`flex items-center justify-center ${className}`}>
 					<LoaderCircle className="h-6 w-6 animate-spin" />

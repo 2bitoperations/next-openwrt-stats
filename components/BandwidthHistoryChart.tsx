@@ -10,6 +10,7 @@ import {
 } from './ui/chart';
 import { formatBitrate, formatBytes } from '@/lib/utils';
 import { MetricHistory } from '@/lib/server/metrics';
+import { useTimeRange } from '@/providers/timeRangeContext';
 import { LoaderCircle } from 'lucide-react';
 
 export function estimateBucketSeconds(timestamps: number[]) {
@@ -145,7 +146,9 @@ export function BandwidthHistoryChart({
 	towardDevices?: boolean;
 }) {
 	const [ownRange, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
-	const rangeSeconds = controlledRange ?? ownRange;
+	const timeRange = useTimeRange();
+	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;
+	const showOwnPicker = controlledRange === undefined && !timeRange;
 
 	const query = useMetricHistory({
 		scope,
@@ -168,7 +171,7 @@ export function BandwidthHistoryChart({
 
 	return (
 		<div className="space-y-2">
-			{controlledRange === undefined && (
+			{showOwnPicker && (
 				<div className="flex items-center justify-end">
 					<RangePicker
 						rangeSeconds={rangeSeconds}

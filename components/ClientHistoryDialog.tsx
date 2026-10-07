@@ -30,16 +30,19 @@ export function ClientHistoryDialog({
 	return (
 		<Dialog open={open} onOpenChange={setOpen}>
 			<DialogTrigger asChild>{children}</DialogTrigger>
-			<DialogContent className="w-full max-w-[95vw] sm:max-w-2xl md:max-w-3xl">
+			<DialogContent className="w-full max-w-[95vw] max-h-[90dvh] overflow-y-auto sm:max-w-2xl md:max-w-3xl">
 				<DialogHeader>
 					<DialogTitle>{clientName || clientMac} — History</DialogTitle>
+					<div className="flex justify-end">
+						<RangePicker
+							rangeSeconds={rangeSeconds}
+							setRangeSeconds={setRangeSeconds}
+						/>
+					</div>
 				</DialogHeader>
 				<div className="space-y-6">
 					<div className="space-y-4">
-						<div className="flex items-center justify-between">
-							<h4 className="text-muted-foreground text-sm font-medium">Traffic</h4>
-							<RangePicker rangeSeconds={rangeSeconds} setRangeSeconds={setRangeSeconds} />
-						</div>
+						<h4 className="text-muted-foreground text-sm font-medium">Traffic</h4>
 						<div>
 							<h5 className="text-muted-foreground mb-1 text-xs">Total</h5>
 							<BandwidthHistoryChart
@@ -81,6 +84,7 @@ export function ClientHistoryDialog({
 						<SignalHistoryChart
 							clientMac={clientMac}
 							presenceEnabled={presenceEnabled}
+							rangeSeconds={rangeSeconds}
 							className="aspect-auto h-[200px] w-full sm:h-[260px]"
 						/>
 					</div>

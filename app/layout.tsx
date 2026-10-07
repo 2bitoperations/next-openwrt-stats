@@ -4,6 +4,7 @@ import { QueryProvider } from '@/providers/queryProvider';
 import { NetworkProvider } from '@/providers/networkContext';
 import { ActiveRouterProvider } from '@/providers/activeRouterContext';
 import { UpdateManagerProvider } from '@/providers/updateManagerContext';
+import { TimeRangeProvider } from '@/providers/timeRangeContext';
 
 export const metadata = {
 	title: 'Openwrt Stats',
@@ -20,11 +21,13 @@ export default function RootLayout({
 			<body className="font-sans">
 				<Toaster />
 				<QueryProvider>
-					<ActiveRouterProvider>
-						<NetworkProvider>
-							<UpdateManagerProvider>{children}</UpdateManagerProvider>
-						</NetworkProvider>
-					</ActiveRouterProvider>
+					<TimeRangeProvider>
+						<ActiveRouterProvider>
+							<NetworkProvider>
+								<UpdateManagerProvider>{children}</UpdateManagerProvider>
+							</NetworkProvider>
+						</ActiveRouterProvider>
+					</TimeRangeProvider>
 				</QueryProvider>
 			</body>
 		</html>

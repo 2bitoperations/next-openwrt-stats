@@ -493,33 +493,31 @@ function ClientCard({
 }) {
 	return (
 		<Card className="w-full gap-2">
-			<CardHeader className="relative pb-2 pt-1">
-				<span className="absolute -top-5 right-7 text-[13.2px] font-medium text-white/70">
+			<CardHeader className="pb-2 pt-1">
+				<div className="flex items-center justify-between gap-2">
+					<div className="flex min-w-0 items-center overflow-hidden">
+						{wifiData ? (
+							<ClientProtocolHoverCard
+								clientMac={device.macAddress}
+								wifiData={wifiData}
+								presenceEnabled={presenceEnabled}
+								htmodeByRouterBand={htmodeByRouterBand}
+							>
+								<ClientIcon wifiData={wifiData} />
+							</ClientProtocolHoverCard>
+						) : (
+							<ClientIcon wifiData={wifiData} />
+						)}
+						<h3 className="mx-2 overflow-hidden text-ellipsis whitespace-nowrap text-lg font-semibold">
+							{device.deviceName || 'Unknown Device'}
+						</h3>
+					</div>
 					{rate?.rxMbps || rate?.txMbps ? (
-						<>
+						<span className="shrink-0 whitespace-nowrap text-xs font-medium tabular-nums text-white/70">
 							↓ {rate?.rxMbps.toFixed(2) || '0.00'} / ↑{' '}
 							{rate?.txMbps.toFixed(2) || '0.00'} Mbps
-						</>
-					) : (
-						<></>
-					)}
-				</span>
-				<div className="flex items-center overflow-hidden">
-					{wifiData ? (
-						<ClientProtocolHoverCard
-							clientMac={device.macAddress}
-							wifiData={wifiData}
-							presenceEnabled={presenceEnabled}
-							htmodeByRouterBand={htmodeByRouterBand}
-						>
-							<ClientIcon wifiData={wifiData} />
-						</ClientProtocolHoverCard>
-					) : (
-						<ClientIcon wifiData={wifiData} />
-					)}
-					<h3 className="mx-2 overflow-hidden text-ellipsis whitespace-nowrap text-lg font-semibold">
-						{device.deviceName || 'Unknown Device'}
-					</h3>
+						</span>
+					) : null}
 				</div>
 			</CardHeader>
 			<CardContent>

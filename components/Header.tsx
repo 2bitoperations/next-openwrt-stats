@@ -8,6 +8,8 @@ import { WireguardInfo } from './WireguardInfo';
 import { AllPresenceEventsDialog } from './AllPresenceEvents';
 import { useState } from 'react';
 import { useNetwork } from '@/providers/networkContext';
+import { useTimeRange } from '@/providers/timeRangeContext';
+import { RangePicker } from './BandwidthHistoryChart';
 import { RouterLogs } from './RouterLogs';
 import { UpdateManagerModal } from './UpdateManager';
 import { ManageRouters } from './ManageRouters';
@@ -26,6 +28,7 @@ export function Header({
 	const managetRouterDialogState = useState(false);
 	const presenceDialogState = useState(false);
 	const { networkInterfaces } = useNetwork();
+	const timeRange = useTimeRange();
 	const wireguardInterfaces = networkInterfaces?.filter(
 		(device) => device.proto === 'wireguard'
 	);
@@ -33,9 +36,7 @@ export function Header({
 		wireguardInterfaces?.[0]?.interface || ''
 	);
 	const showPluginDropdown =
-		(wireguardInterfaces?.length && wireguardInterfaces.length > 0) ||
-		pbrEnabled ||
-		presenceEnabled;
+		!!wireguardInterfaces?.length || pbrEnabled || presenceEnabled;
 	return (
 		<header className="bg-card sticky top-0 z-10 w-full border-b border-neutral-800">
 			<div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -47,6 +48,12 @@ export function Header({
 						<h1 className="hidden text-2xl font-bold text-white md:block">
 							OpenWrt Stats
 						</h1>
+						{timeRange && (
+							<RangePicker
+								rangeSeconds={timeRange.rangeSeconds}
+								setRangeSeconds={timeRange.setRangeSeconds}
+							/>
+						)}
 					</div>
 
 					<div className="flex items-center gap-2 sm:gap-4">
@@ -95,7 +102,7 @@ export function Header({
 					}}
 				/>
 			)}
-			{wireguardInterfaces?.length && wireguardInterfaces.length > 0 && (
+			{!!wireguardInterfaces?.length && (
 				<WireguardInfo
 					wireguardDialogState={{
 						isOpen: wireguardDialogState[0],

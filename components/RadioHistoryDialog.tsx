@@ -212,6 +212,9 @@ export function RadioHistoryDialog({
 	children: React.ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
+	const [rangeSeconds, setRangeSeconds] = useState<number>(
+		RANGE_OPTIONS[1].seconds
+	);
 	const isMesh = radio.mode === 'mesh';
 
 	return (
@@ -226,13 +229,20 @@ export function RadioHistoryDialog({
 				<div className="space-y-6">
 					{isMesh ? (
 						<div>
-							<h4 className="text-muted-foreground mb-1 text-sm font-medium">
-								Bandwidth
-							</h4>
+							<div className="flex items-center justify-between">
+								<h4 className="text-muted-foreground text-sm font-medium">
+									Bandwidth
+								</h4>
+								<RangePicker
+									rangeSeconds={rangeSeconds}
+									setRangeSeconds={setRangeSeconds}
+								/>
+							</div>
 							<BandwidthHistoryChart
 								scope="interface"
 								metricKey={radio.ifname}
 								displayName={radio.displayName}
+								rangeSeconds={rangeSeconds}
 								className="aspect-auto h-[220px] w-full"
 							/>
 						</div>

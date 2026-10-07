@@ -13,6 +13,7 @@ import {
 	RangePicker,
 	estimateBucketSeconds
 } from './BandwidthHistoryChart';
+import { useTimeRange } from '@/providers/timeRangeContext';
 import { formatBitrate, formatBytes } from '@/lib/utils';
 import { MetricHistory } from '@/lib/server/metrics';
 import { InterfaceDevices } from '@/lib/server/metrics';
@@ -48,14 +49,19 @@ function timeTickFormat(timestamp: number, rangeSeconds: number) {
 
 export function InterfaceBreakdownChart({
 	displayName,
-	className = 'aspect-auto h-[220px] w-full'
+	className = 'aspect-auto h-[220px] w-full',
+	rangeSeconds: controlledRange
 }: {
 	displayName: string;
 	className?: string;
+	rangeSeconds?: number;
 }) {
-	const [rangeSeconds, setRangeSeconds] = useState<number>(
+	const [ownRange, setRangeSeconds] = useState<number>(
 		RANGE_OPTIONS[1].seconds
 	);
+	const timeRange = useTimeRange();
+	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;
+	const showOwnPicker = controlledRange === undefined && !timeRange;
 
 	const devicesQuery = useQuery({
 		queryKey: ['interfaceDevices', displayName],
@@ -132,12 +138,14 @@ export function InterfaceBreakdownChart({
 
 	return (
 		<div className="space-y-2">
-			<div className="flex items-center justify-end">
-				<RangePicker
-					rangeSeconds={rangeSeconds}
-					setRangeSeconds={setRangeSeconds}
-				/>
-			</div>
+			{showOwnPicker && (
+				<div className="flex items-center justify-end">
+					<RangePicker
+						rangeSeconds={rangeSeconds}
+						setRangeSeconds={setRangeSeconds}
+					/>
+				</div>
+			)}
 			{isLoading ? (
 				<div className={`flex items-center justify-center ${className}`}>
 					<LoaderCircle className="h-6 w-6 animate-spin" />
