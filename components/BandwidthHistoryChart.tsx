@@ -229,47 +229,51 @@ export function BandwidthHistoryChart({
 								/>
 							}
 						/>
-						{stacked ? (
-							<>
-								<Area
-									type="monotone"
-									dataKey="rxAvg"
-									stackId="total"
-									stroke="var(--chart-1)"
-									fill="var(--chart-1)"
-									fillOpacity={0.35}
-									isAnimationActive={false}
-								/>
-								<Area
-									type="monotone"
-									dataKey="txAvg"
-									stackId="total"
-									stroke="var(--chart-2)"
-									fill="var(--chart-2)"
-									fillOpacity={0.35}
-									isAnimationActive={false}
-								/>
-							</>
-						) : (
-							<>
-								<Line
-									type="monotone"
-									dataKey="rxAvg"
-									stroke="var(--chart-1)"
-									strokeWidth={2}
-									dot={false}
-									isAnimationActive={false}
-								/>
-								<Line
-									type="monotone"
-									dataKey="txAvg"
-									stroke="var(--chart-2)"
-									strokeWidth={2}
-									dot={false}
-									isAnimationActive={false}
-								/>
-							</>
-						)}
+						{/* recharts finds series by scanning its direct children and does not look
+						    inside fragments - pass keyed arrays, not <>...</>. */}
+						{stacked
+							? [
+									<Area
+										key="rx"
+										type="monotone"
+										dataKey="rxAvg"
+										stackId="total"
+										stroke="var(--chart-1)"
+										fill="var(--chart-1)"
+										fillOpacity={0.35}
+										isAnimationActive={false}
+									/>,
+									<Area
+										key="tx"
+										type="monotone"
+										dataKey="txAvg"
+										stackId="total"
+										stroke="var(--chart-2)"
+										fill="var(--chart-2)"
+										fillOpacity={0.35}
+										isAnimationActive={false}
+									/>
+								]
+							: [
+									<Line
+										key="rx"
+										type="monotone"
+										dataKey="rxAvg"
+										stroke="var(--chart-1)"
+										strokeWidth={2}
+										dot={false}
+										isAnimationActive={false}
+									/>,
+									<Line
+										key="tx"
+										type="monotone"
+										dataKey="txAvg"
+										stroke="var(--chart-2)"
+										strokeWidth={2}
+										dot={false}
+										isAnimationActive={false}
+									/>
+								]}
 					</ComposedChart>
 				</ChartContainer>
 			)}
