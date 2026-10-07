@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
+import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
 import {
 	ChartConfig,
 	ChartContainer,
@@ -129,7 +129,8 @@ export function BandwidthHistoryChart({
 	rangeSeconds: controlledRange,
 	emptyMessage = 'No data yet',
 	towardDevices = false,
-	seriesLabels
+	seriesLabels,
+	stacked = false
 }: {
 	scope: 'interface' | 'client' | 'client_lan' | 'client_wan' | 'network';
 	metricKey: string;
@@ -148,6 +149,9 @@ export function BandwidthHistoryChart({
 	// Replace Download/Upload in tooltip + legend (e.g. Combined LAN: LAN-local /
 	// Internet); the legend then also shows tx's share of the total.
 	seriesLabels?: { rx: string; tx: string };
+	// Draw rx and tx as stacked areas (top edge = total) instead of two lines -
+	// for series whose two parts add up to something meaningful (Combined LAN).
+	stacked?: boolean;
 }) {
 	const [ownRange, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
 	const timeRange = useTimeRange();
@@ -201,7 +205,7 @@ export function BandwidthHistoryChart({
 				</div>
 			) : (
 				<ChartContainer config={chartConfig} className={className}>
-					<LineChart data={chartData}>
+					<ComposedChart data={chartData}>
 						<CartesianGrid vertical={false} />
 						<XAxis dataKey="time" tick={{ fontSize: 10 }} minTickGap={30} />
 						<YAxis
@@ -225,23 +229,48 @@ export function BandwidthHistoryChart({
 								/>
 							}
 						/>
-						<Line
-							type="monotone"
-							dataKey="rxAvg"
-							stroke="var(--chart-1)"
-							strokeWidth={2}
-							dot={false}
-							isAnimationActive={false}
-						/>
-						<Line
-							type="monotone"
-							dataKey="txAvg"
-							stroke="var(--chart-2)"
-							strokeWidth={2}
-							dot={false}
-							isAnimationActive={false}
-						/>
-					</LineChart>
+						{stacked ? (
+							<>
+								<Area
+									type="monotone"
+									dataKey="rxAvg"
+									stackId="total"
+									stroke="var(--chart-1)"
+									fill="var(--chart-1)"
+									fillOpacity={0.35}
+									isAnimationActive={false}
+								/>
+								<Area
+									type="monotone"
+									dataKey="txAvg"
+									stackId="total"
+									stroke="var(--chart-2)"
+									fill="var(--chart-2)"
+									fillOpacity={0.35}
+									isAnimationActive={false}
+								/>
+							</>
+						) : (
+							<>
+								<Line
+									type="monotone"
+									dataKey="rxAvg"
+									stroke="var(--chart-1)"
+									strokeWidth={2}
+									dot={false}
+									isAnimationActive={false}
+								/>
+								<Line
+									type="monotone"
+									dataKey="txAvg"
+									stroke="var(--chart-2)"
+									strokeWidth={2}
+									dot={false}
+									isAnimationActive={false}
+								/>
+							</>
+						)}
+					</ComposedChart>
 				</ChartContainer>
 			)}
 			{chartData.length > 0 && (

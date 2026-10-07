@@ -78,6 +78,7 @@ function WholeNetworkCard({
 	scope = 'interface',
 	towardDevices = false,
 	seriesLabels,
+	stacked,
 	children
 }: {
 	title: string;
@@ -85,6 +86,7 @@ function WholeNetworkCard({
 	scope?: 'interface' | 'network';
 	towardDevices?: boolean;
 	seriesLabels?: { rx: string; tx: string };
+	stacked?: boolean;
 	children?: React.ReactNode;
 }) {
 	return (
@@ -103,6 +105,7 @@ function WholeNetworkCard({
 						combined
 						towardDevices={towardDevices}
 						seriesLabels={seriesLabels}
+						stacked={stacked}
 					/>
 				)}
 			</CardContent>
@@ -141,6 +144,7 @@ export function BandwidthHistory() {
 				metricKey="lan"
 				scope="network"
 				seriesLabels={{ rx: 'LAN-local', tx: 'Internet' }}
+				stacked
 			/>
 			<WholeNetworkCard title="Combined Mesh" metricKey="mesh">
 				<MeshHistoryChart />
