@@ -84,7 +84,7 @@ export function useMetricHistory({
 	combined,
 	rangeSeconds
 }: {
-	scope: 'interface' | 'client' | 'client_lan' | 'client_wan' | 'radio';
+	scope: 'interface' | 'client' | 'client_lan' | 'client_wan' | 'radio' | 'network';
 	metricKey: string;
 	displayName?: string;
 	combined?: boolean;
@@ -128,9 +128,10 @@ export function BandwidthHistoryChart({
 	className = 'aspect-auto h-[180px] w-full',
 	rangeSeconds: controlledRange,
 	emptyMessage = 'No data yet',
-	towardDevices = false
+	towardDevices = false,
+	seriesLabels
 }: {
-	scope: 'interface' | 'client' | 'client_lan' | 'client_wan';
+	scope: 'interface' | 'client' | 'client_lan' | 'client_wan' | 'network';
 	metricKey: string;
 	displayName?: string;
 	combined?: boolean;
@@ -144,6 +145,9 @@ export function BandwidthHistoryChart({
 	// (br-lan) its rx is what the devices sent, so to keep Download = data
 	// delivered to devices (as for clients and the WAN), swap rx/tx.
 	towardDevices?: boolean;
+	// Replace Download/Upload in tooltip + legend (e.g. Combined LAN: LAN-local /
+	// Internet); the legend then also shows tx's share of the total.
+	seriesLabels?: { rx: string; tx: string };
 }) {
 	const [ownRange, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
 	const timeRange = useTimeRange();
@@ -211,7 +215,7 @@ export function BandwidthHistoryChart({
 									formatter={(value, name) => (
 										<div className="flex w-full justify-between gap-4">
 											<span className="text-muted-foreground">
-												{name === 'rxAvg' ? 'Download' : 'Upload'}
+												{name === 'rxAvg' ? (seriesLabels?.rx ?? 'Download') : (seriesLabels?.tx ?? 'Upload')}
 											</span>
 											<span className="font-medium">
 												{formatBitrate(Number(value))}
@@ -247,15 +251,25 @@ export function BandwidthHistoryChart({
 							className="inline-block h-2 w-2 rounded-full"
 							style={{ background: 'var(--chart-1)' }}
 						/>
-						Total down: <span className="text-foreground">{formatBytes(totalRxBytes)}</span>
+						{seriesLabels ? `${seriesLabels.rx}:` : 'Total down:'}{' '}
+						<span className="text-foreground">{formatBytes(totalRxBytes)}</span>
 					</span>
 					<span className="flex items-center gap-1.5">
 						<span
 							className="inline-block h-2 w-2 rounded-full"
 							style={{ background: 'var(--chart-2)' }}
 						/>
-						Total up: <span className="text-foreground">{formatBytes(totalTxBytes)}</span>
+						{seriesLabels ? `${seriesLabels.tx}:` : 'Total up:'}{' '}
+						<span className="text-foreground">{formatBytes(totalTxBytes)}</span>
 					</span>
+					{seriesLabels && totalRxBytes + totalTxBytes > 0 && (
+						<span>
+							{seriesLabels.tx} share:{' '}
+							<span className="text-foreground">
+								{((totalTxBytes / (totalRxBytes + totalTxBytes)) * 100).toFixed(0)}%
+							</span>
+						</span>
+					)}
 				</div>
 			)}
 		</div>

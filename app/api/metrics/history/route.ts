@@ -18,7 +18,8 @@ export async function GET(request: Request) {
 			scope !== 'client' &&
 			scope !== 'client_lan' &&
 			scope !== 'client_wan' &&
-			scope !== 'radio'
+			scope !== 'radio' &&
+			scope !== 'network'
 		) {
 			return new Response(
 				JSON.stringify({ success: false, errorMessage: 'Invalid scope' }),

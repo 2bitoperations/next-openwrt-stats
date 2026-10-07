@@ -33,7 +33,7 @@ const WAN_FAILOVER_EVERY_N_TICKS = 20; // active-WAN state every ~20s - the rout
 const PRUNE_EVERY_N_TICKS = 60; // raw retention is 5 minutes, pruning once/minute is plenty
 const MAX_CATCHUP_BUCKETS = 120;
 
-type MetricScopeName = 'interface' | 'client' | 'client_lan' | 'client_wan' | 'radio';
+type MetricScopeName = 'interface' | 'client' | 'client_lan' | 'client_wan' | 'radio' | 'network';
 export type ClientSplitScope = 'client_lan' | 'client_wan';
 
 // The `tx` parameter type from a `db.transaction(async (tx) => ...)` callback.
@@ -134,7 +134,7 @@ async function getOrCreateSeriesId(
 type PendingRow = typeof metricSampleTable.$inferInsert;
 
 async function buildInterfaceRow(
-	scope: 'interface' | 'client' | ClientSplitScope,
+	scope: 'interface' | 'client' | ClientSplitScope | 'network',
 	routerId: number | null,
 	key: string,
 	timestamp: number,
@@ -196,7 +196,12 @@ async function computeInterfaceSampleRows(
 		routers.map(async (router) => {
 			const stats = await getNetworkDeviceStats(router.displayName);
 			if (!stats.success) return;
-			for (const [device, { rxBytes, txBytes }] of Object.entries(stats.data)) {
+			const { stats: deviceStats, bridgeMembers } = stats.data;
+			for (const [netdev, { rxBytes, txBytes }] of Object.entries(deviceStats)) {
+				// A `wan` netdev that is a bridge port is an AP's uplink, not a WAN:
+				// keep it out of the per-router WAN tab and Combined WAN.
+				const device =
+					netdev === 'wan' && bridgeMembers.includes(netdev) ? 'wan-bridged' : netdev;
 				const key = seriesKey('interface', router.id, device);
 				const prev = lastCounters.get(key);
 				lastCounters.set(key, { rx: rxBytes, tx: txBytes, time: nowSec });
@@ -308,7 +313,13 @@ async function computeClientAndRadioSampleRows(
 	}
 
 	// LAN / Internet breakdown (macacct >= 2 only): two more series per
-	// client, diffed independently, same reset handling.
+	// client, diffed independently, same reset handling. The same deltas also
+	// feed the network-wide LAN aggregate (Combined LAN): local = bytes delivered
+	// to clients from other LAN devices (each LAN-local frame counted once, at its
+	// destination); internet = both directions of clients' internet traffic.
+	let networkLocalBps = 0;
+	let networkInternetBps = 0;
+	let networkSamples = 0;
 	for (const [mac, counters] of Object.entries(macacct)) {
 		if (!counters.lan || !counters.wan) continue;
 		for (const [scope, pair] of [
@@ -324,7 +335,19 @@ async function computeClientAndRadioSampleRows(
 			const dtx = pair.tx - prev.tx;
 			if (dt <= 0 || drx < 0 || dtx < 0) continue;
 			rows.push(await buildInterfaceRow(scope, null, mac, nowSec, drx / dt, dtx / dt));
+			if (scope === 'client_lan') {
+				networkLocalBps += drx / dt;
+			} else {
+				networkInternetBps += (drx + dtx) / dt;
+			}
+			networkSamples++;
 		}
+	}
+	if (networkSamples > 0) {
+		// Column reuse for scope 'network' key 'lan': rx = LAN-local, tx = internet.
+		rows.push(
+			await buildInterfaceRow('network', null, 'lan', nowSec, networkLocalBps, networkInternetBps)
+		);
 	}
 
 	return rows;
@@ -863,6 +886,46 @@ export async function queryHistory({
 }
 
 export type CachedDhcpLeases = Awaited<ReturnType<typeof getCachedDhcpLeases>>;
+// Combined Mesh: per router, the sum of what its mesh radios (wifi interfaces in
+// mesh mode, per the cached radio snapshot - not bat0) TRANSMIT. Summed over
+// routers, every over-the-air transmission is counted once per hop - the airtime
+// load on the shared mesh channel.
+export async function queryMeshHistory({ from, to }: { from: number; to: number }) {
+	const radios = await getCachedWifiRadios();
+	if (!radios.success) return { success: false, errorMessage: 'Failed to get radios' } as const;
+	const routers = await getRoutersWithId();
+	if (!routers.success) return { success: false, errorMessage: 'Failed to get routers' } as const;
+
+	const results: { displayName: string; points: MetricHistoryPoint[] }[] = [];
+	for (const router of routers.data) {
+		const meshIfnames = [
+			...new Set(
+				radios.data
+					.filter((r) => r.displayName === router.displayName && r.mode === 'mesh' && r.ifname)
+					.map((r) => r.ifname as string)
+			)
+		];
+		if (meshIfnames.length === 0) continue;
+
+		const byTimestamp = new Map<number, { txAvg: number; txMax: number }>();
+		for (const ifname of meshIfnames) {
+			const history = await queryHistory({ scope: 'interface', key: ifname, routerId: router.id, from, to });
+			if (!history.success) continue;
+			for (const p of history.data) {
+				const acc = byTimestamp.get(p.timestamp) ?? { txAvg: 0, txMax: 0 };
+				byTimestamp.set(p.timestamp, { txAvg: acc.txAvg + p.txAvg, txMax: acc.txMax + p.txMax });
+			}
+		}
+		const points = [...byTimestamp.entries()]
+			.sort((a, b) => a[0] - b[0])
+			.map(([timestamp, v]) => ({ timestamp, rxAvg: 0, rxMax: 0, txAvg: v.txAvg, txMax: v.txMax }));
+		results.push({ displayName: router.displayName, points });
+	}
+	return { success: true, data: { routers: results } } as const;
+}
+
+export type MeshHistory = Awaited<ReturnType<typeof queryMeshHistory>>;
+
 export async function getCachedDhcpLeases() {
 	try {
 		const row = await db

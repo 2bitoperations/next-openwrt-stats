@@ -184,9 +184,15 @@ export async function getNetworkDeviceStats(displayName: string) {
 		};
 	}
 
+	// Every device that is a port of some bridge (e.g. an AP whose `wan` port is
+	// bridged into br-lan as its uplink - not a real WAN).
+	const bridgeMembers = Object.values(devices).flatMap(
+		(info) => info['bridge-members'] ?? []
+	);
+
 	return {
 		success: true,
-		data: stats
+		data: { stats, bridgeMembers }
 	} as const;
 }
 

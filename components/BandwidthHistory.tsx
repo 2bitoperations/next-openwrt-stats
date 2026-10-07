@@ -8,6 +8,7 @@ import { ActivityIcon, RouterIcon } from 'lucide-react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
 import { Button } from './ui/button';
 import { AvailableKeys } from '@/lib/server/metrics';
+import { MeshHistoryChart } from './MeshHistoryChart';
 
 type Tab = 'wan' | 'lan' | 'breakdown';
 const TABS: { id: Tab; label: string }[] = [
@@ -74,11 +75,17 @@ function RouterBandwidthCard({
 function WholeNetworkCard({
 	title,
 	metricKey,
-	towardDevices = false
+	scope = 'interface',
+	towardDevices = false,
+	seriesLabels,
+	children
 }: {
 	title: string;
 	metricKey: string;
+	scope?: 'interface' | 'network';
 	towardDevices?: boolean;
+	seriesLabels?: { rx: string; tx: string };
+	children?: React.ReactNode;
 }) {
 	return (
 		<Card className="w-full">
@@ -89,12 +96,15 @@ function WholeNetworkCard({
 				</h3>
 			</CardHeader>
 			<CardContent>
-				<BandwidthHistoryChart
-					scope="interface"
-					metricKey={metricKey}
-					combined
-					towardDevices={towardDevices}
-				/>
+				{children ?? (
+					<BandwidthHistoryChart
+						scope={scope}
+						metricKey={metricKey}
+						combined
+						towardDevices={towardDevices}
+						seriesLabels={seriesLabels}
+					/>
+				)}
 			</CardContent>
 		</Card>
 	);
@@ -126,12 +136,15 @@ export function BandwidthHistory() {
 			{availableKeys.data?.wan && (
 				<WholeNetworkCard title="Combined WAN" metricKey="wan" />
 			)}
-			{availableKeys.data?.['br-lan'] && (
-				<WholeNetworkCard title="Combined LAN" metricKey="br-lan" towardDevices />
-			)}
-			{availableKeys.data?.bat0 && (
-				<WholeNetworkCard title="Combined Mesh" metricKey="bat0" />
-			)}
+			<WholeNetworkCard
+				title="Combined LAN"
+				metricKey="lan"
+				scope="network"
+				seriesLabels={{ rx: 'LAN-local', tx: 'Internet' }}
+			/>
+			<WholeNetworkCard title="Combined Mesh" metricKey="mesh">
+				<MeshHistoryChart />
+			</WholeNetworkCard>
 			{allRouters.map((router) => (
 				<RouterBandwidthCard
 					key={router.displayName}

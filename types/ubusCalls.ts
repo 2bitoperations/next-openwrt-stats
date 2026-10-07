@@ -134,7 +134,8 @@ export const networkDeviceStatusSchema = z.object({
 			z.string(),
 			z.object({
 				up: z.boolean().optional(),
-				statistics: networkDeviceStatistics.optional()
+				statistics: networkDeviceStatistics.optional(),
+				'bridge-members': z.array(z.string()).optional()
 			})
 		)
 	])

@@ -83,7 +83,10 @@ export const metricScope = {
 	// Per-client LAN / Internet breakdown of `client` (macacct >= 2 only).
 	client_lan: 'client_lan',
 	client_wan: 'client_wan',
-	radio: 'radio'
+	radio: 'radio',
+	// Network-wide aggregates computed by the collector (routerId null), e.g.
+	// key 'lan': rxAvg = LAN-local B/s, txAvg = internet B/s.
+	network: 'network'
 } as const;
 export type MetricScope = (typeof metricScope)[keyof typeof metricScope];
 
