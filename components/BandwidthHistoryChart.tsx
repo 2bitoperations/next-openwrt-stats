@@ -13,6 +13,13 @@ import { MetricHistory } from '@/lib/server/metrics';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import { LoaderCircle } from 'lucide-react';
 
+// Evenly spaced ticks across the whole window (recharts would otherwise place
+// them only where there is data).
+export function windowTicks(nowSec: number, rangeSeconds: number, count = 6) {
+	const step = rangeSeconds / (count - 1);
+	return Array.from({ length: count }, (_, i) => Math.round(nowSec - rangeSeconds + i * step));
+}
+
 export function estimateBucketSeconds(timestamps: number[]) {
 	if (timestamps.length < 2) return 0;
 	return (
@@ -174,6 +181,7 @@ export function BandwidthHistoryChart({
 	}));
 
 	const bucketSeconds = estimateBucketSeconds(chartData.map((p) => p.timestamp));
+	const nowSec = Math.floor(Date.now() / 1000);
 	const totalRxBytes = chartData.reduce((sum, p) => sum + p.rxAvg, 0) * bucketSeconds;
 	const totalTxBytes = chartData.reduce((sum, p) => sum + p.txAvg, 0) * bucketSeconds;
 
@@ -207,7 +215,20 @@ export function BandwidthHistoryChart({
 				<ChartContainer config={chartConfig} className={className}>
 					<ComposedChart data={chartData}>
 						<CartesianGrid vertical={false} />
-						<XAxis dataKey="time" tick={{ fontSize: 10 }} minTickGap={30} />
+						{/* Numeric time axis pinned to the selected window, so a series with
+						    less history than the range (e.g. one added recently) shows as a
+						    partly empty chart instead of being stretched across the width. */}
+						<XAxis
+							dataKey="timestamp"
+							type="number"
+							scale="time"
+							domain={[nowSec - rangeSeconds, nowSec]}
+							ticks={windowTicks(nowSec, rangeSeconds)}
+							allowDataOverflow
+							tickFormatter={(ts) => timeTickFormat(Number(ts), rangeSeconds)}
+							tick={{ fontSize: 10 }}
+							minTickGap={30}
+						/>
 						<YAxis
 							tickFormatter={(v) => formatBitrate(v)}
 							width={70}
@@ -216,6 +237,7 @@ export function BandwidthHistoryChart({
 						<ChartTooltip
 							content={
 								<ChartTooltipContent
+									labelFormatter={(_, payload) => payload?.[0]?.payload?.time}
 									formatter={(value, name) => (
 										<div className="flex w-full justify-between gap-4">
 											<span className="text-muted-foreground">

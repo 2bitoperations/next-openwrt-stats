@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { LoaderCircle } from 'lucide-react';
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from './ui/chart';
-import { RANGE_OPTIONS, RangePicker, estimateBucketSeconds } from './BandwidthHistoryChart';
+import { RANGE_OPTIONS, RangePicker, estimateBucketSeconds, windowTicks } from './BandwidthHistoryChart';
 import { formatBitrate, formatBytes } from '@/lib/utils';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import type { MeshHistory } from '@/lib/server/metrics';
@@ -55,6 +55,7 @@ export function MeshHistoryChart({ rangeSeconds: controlledRange }: { rangeSecon
 		name: n,
 		bytes: chartData.reduce((sum, p) => sum + ((p as Record<string, number>)[n] ?? 0), 0) * bucketSeconds
 	}));
+	const nowSec = Math.floor(Date.now() / 1000);
 	const timeLabel = (ts: number) =>
 		new Date(ts * 1000).toLocaleString(undefined,
 			rangeSeconds > 24 * 60 * 60
@@ -85,7 +86,7 @@ export function MeshHistoryChart({ rangeSeconds: controlledRange }: { rangeSecon
 				<ChartContainer config={config} className="aspect-auto h-[180px] w-full">
 					<AreaChart data={chartData}>
 						<CartesianGrid vertical={false} />
-						<XAxis dataKey="timestamp" tickFormatter={(ts) => timeLabel(Number(ts))} tick={{ fontSize: 10 }} minTickGap={30} />
+						<XAxis dataKey="timestamp" type="number" scale="time" domain={[nowSec - rangeSeconds, nowSec]} ticks={windowTicks(nowSec, rangeSeconds)} allowDataOverflow tickFormatter={(ts) => timeLabel(Number(ts))} tick={{ fontSize: 10 }} minTickGap={30} />
 						<YAxis tickFormatter={(v) => formatBitrate(v)} width={70} tick={{ fontSize: 10 }} />
 						<ChartTooltip
 							content={
