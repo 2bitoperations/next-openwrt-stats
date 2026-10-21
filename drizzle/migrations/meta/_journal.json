@@ -57,6 +57,13 @@
       "when": 1788473300028,
       "tag": "0007_cool_ken_ellis",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1792611385526,
+      "tag": "0008_cynical_living_lightning",
+      "breakpoints": true
     }
   ]
 }

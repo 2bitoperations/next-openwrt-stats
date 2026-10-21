@@ -511,6 +511,21 @@ export async function getWifiClientsTraffic(ifnames: {
 				time: number;
 			};
 		} = {};
+		// Every AP's own counters per station (client's side, like trafficStats),
+		// keyed `router|ifname`: the collector diffs each one separately, since
+		// a roaming station is listed at two APs with unrelated counters.
+		const stations: {
+			[mac: string]: { [apId: string]: { rxBytes: number; txBytes: number } };
+		} = {};
+		const addStation = (
+			mac: string,
+			apId: string,
+			rxBytes: number,
+			txBytes: number
+		) => {
+			stations[mac] ??= {};
+			stations[mac][apId] ??= { rxBytes, txBytes };
+		};
 		const perRadio: {
 			[router: string]: {
 				[ifname: string]: {
@@ -573,6 +588,12 @@ export async function getWifiClientsTraffic(ifnames: {
 							noises: wifiClients.map((client) => client.noise)
 						};
 						for (const client of wifiClients) {
+							addStation(
+								client.mac.toUpperCase(),
+								`${router}|${ifname.ifname}`,
+								client.tx.bytes,
+								client.rx.bytes
+							);
 							if (
 								trafficStats[client.mac.toUpperCase()] &&
 								// This is a workaround for the fact that sometimes a single device
@@ -613,6 +634,14 @@ export async function getWifiClientsTraffic(ifnames: {
 							parsedHostapdResponse.data.result[1].clients
 						)) {
 							const client = parsedHostapdResponse.data.result[1].clients[key];
+							if (client.bytes) {
+								addStation(
+									key.toUpperCase(),
+									`${router}|${ifname.ifname}`,
+									client.bytes.tx,
+									client.bytes.rx
+								);
+							}
 							if (
 								trafficStats[key.toUpperCase()] &&
 								client.signal &&
@@ -639,6 +668,7 @@ export async function getWifiClientsTraffic(ifnames: {
 		return {
 			success: true,
 			data: trafficStats,
+			stations,
 			perRadio
 		} as const;
 	} catch (error) {

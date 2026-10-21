@@ -14,7 +14,16 @@ import { and, avg, eq, gte, inArray, lte, max, min, sql } from 'drizzle-orm';
 import { getRoutersWithId } from './router';
 import { getNetworkDeviceStats } from './routerInterfaces';
 import { getWifiClientsTraffic, getWifiRadios } from './wifiAPs';
-import { getHostTrafficTotals, type HostSource } from './hostTraffic';
+import { getHostTrafficTotals } from './hostTraffic';
+import {
+	ClientCounterTracker,
+	MAX_SPAN_SECONDS,
+	SeriesRowBuilder,
+	counterSegment,
+	type CounterReading,
+	type RateUpdate,
+	type Segment
+} from './counterDiff';
 import { getDhcpDevices } from './dhcpDevices';
 import { ubusBatchCall } from './ubusCalls';
 import { routerInfoSchema } from '@/types/ubusCalls';
@@ -32,6 +41,10 @@ const ROUTER_INFO_EVERY_N_TICKS = 30; // uptime/load/mem every ~30s
 const WAN_FAILOVER_EVERY_N_TICKS = 20; // active-WAN state every ~20s - the router's own watchdog already does the real 5s/15s work, this just mirrors it
 const PRUNE_EVERY_N_TICKS = 60; // raw retention is 5 minutes, pruning once/minute is plenty
 const MAX_CATCHUP_BUCKETS = 120;
+// A bucket is rolled up only this long after it ends: late rate updates and
+// backdated rows (counterDiff.ts) reach back up to MAX_SPAN_SECONDS. Must stay
+// below RAW_RETENTION_SECONDS minus a 1m bucket.
+const ROLLUP_GRACE_SECONDS = MAX_SPAN_SECONDS + 30;
 
 type MetricScopeName = 'interface' | 'client' | 'client_lan' | 'client_wan' | 'radio' | 'network';
 export type ClientSplitScope = 'client_lan' | 'client_wan';
@@ -41,17 +54,12 @@ type DbClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 type RouterRow = { id: number; displayName: string; isPrimary: number };
 
-// `source` guards against diffing across a basis change - e.g. a client whose
-// counters switch from hostapd's station counters to macacct's or nlbwmon's,
-// which count different things on different scales and would produce a
-// garbage delta if diffed against each other.
-type CounterState = {
-	rx: number;
-	tx: number;
-	time: number;
-	source?: 'wifi' | HostSource;
-};
+type CounterState = { rx: number; tx: number; time: number };
 const lastCounters = new Map<string, CounterState>();
+// Per-client counters, one per node, and every rate series' last row (see
+// counterDiff.ts).
+const clientCounters = new ClientCounterTracker();
+const rateRows = new SeriesRowBuilder();
 const seriesIdCache = new Map<string, number>();
 
 type WifiIfnames = {
@@ -133,27 +141,38 @@ async function getOrCreateSeriesId(
 
 type PendingRow = typeof metricSampleTable.$inferInsert;
 
-async function buildInterfaceRow(
+type PendingUpdate = RateUpdate & { seriesId: number };
+type SampleRows = { rows: PendingRow[]; updates: PendingUpdate[] };
+
+// Rows (and updates to earlier rows) for one rate series this tick, from its
+// segments - see SeriesRowBuilder.
+async function buildRateRows(
+	out: SampleRows,
 	scope: 'interface' | 'client' | ClientSplitScope | 'network',
 	routerId: number | null,
 	key: string,
-	timestamp: number,
-	rx: number,
-	tx: number,
+	segments: Segment[],
+	nowSec: number,
 	signal?: number
-): Promise<PendingRow> {
+) {
+	const built = rateRows.build(seriesKey(scope, routerId, key), segments, nowSec);
+	if (!built) return;
 	const seriesId = await getOrCreateSeriesId(scope, routerId, key);
-	return {
-		seriesId,
-		tier: 'raw',
-		timestamp,
-		rxAvg: rx,
-		rxMax: rx,
-		txAvg: tx,
-		txMax: tx,
-		signalAvg: signal ?? null,
-		signalMin: signal ?? null
-	};
+	for (const row of built.rows) {
+		out.rows.push({
+			seriesId,
+			tier: 'raw',
+			timestamp: row.timestamp,
+			intervalSec: row.intervalSec,
+			rxAvg: row.rx,
+			rxMax: row.rx,
+			txAvg: row.tx,
+			txMax: row.tx,
+			signalAvg: signal ?? null,
+			signalMin: signal ?? null
+		});
+	}
+	for (const update of built.updates) out.updates.push({ seriesId, ...update });
 }
 
 async function buildRadioRow(
@@ -190,8 +209,8 @@ async function buildRadioRow(
 async function computeInterfaceSampleRows(
 	routers: RouterRow[],
 	nowSec: number
-): Promise<PendingRow[]> {
-	const rows: PendingRow[] = [];
+): Promise<SampleRows> {
+	const out: SampleRows = { rows: [], updates: [] };
 	await Promise.all(
 		routers.map(async (router) => {
 			const stats = await getNetworkDeviceStats(router.displayName);
@@ -203,35 +222,24 @@ async function computeInterfaceSampleRows(
 				const device =
 					netdev === 'wan' && bridgeMembers.includes(netdev) ? 'wan-bridged' : netdev;
 				const key = seriesKey('interface', router.id, device);
-				const prev = lastCounters.get(key);
-				lastCounters.set(key, { rx: rxBytes, tx: txBytes, time: nowSec });
-				if (!prev) continue;
-				const dt = nowSec - prev.time;
-				const drx = rxBytes - prev.rx;
-				const dtx = txBytes - prev.tx;
-				if (dt <= 0 || drx < 0 || dtx < 0) continue;
-				rows.push(
-					await buildInterfaceRow(
-						'interface',
-						router.id,
-						device,
-						nowSec,
-						drx / dt,
-						dtx / dt
-					)
-				);
+				const segment = counterSegment(lastCounters, key, rxBytes, txBytes, nowSec);
+				if (!segment) continue;
+				await buildRateRows(out, 'interface', router.id, device, [segment], nowSec);
 			}
 		})
 	);
-	return rows;
+	return out;
 }
 
 async function computeClientAndRadioSampleRows(
 	routers: RouterRow[],
 	nowSec: number
-): Promise<PendingRow[]> {
-	const rows: PendingRow[] = [];
+): Promise<SampleRows> {
+	const out: SampleRows = { rows: [], updates: [] };
+	const rows = out.rows;
 	let wifi: { [mac: string]: { rxBytes: number; txBytes: number; signal?: number } } = {};
+	let stations: { [mac: string]: { [apId: string]: { rxBytes: number; txBytes: number } } } =
+		{};
 
 	if (Object.keys(cachedIfnames).length > 0) {
 		const routerIdByName = new Map(routers.map((r) => [r.displayName, r.id]));
@@ -239,6 +247,7 @@ async function computeClientAndRadioSampleRows(
 
 		if (traffic.success) {
 			wifi = traffic.data;
+			stations = traffic.stations;
 
 			for (const [displayName, radios] of Object.entries(traffic.perRadio)) {
 				const routerId = routerIdByName.get(displayName);
@@ -274,83 +283,89 @@ async function computeClientAndRadioSampleRows(
 	//   nlbw    - nlbwmon (routed local<->non-local flows only)
 	// Signal strength still comes from wifi data whichever basis is used.
 	const hosts = await getHostTrafficTotals();
-	const macacct = hosts.success ? hosts.data.macacct : {};
-	const nlbw = hosts.success ? hosts.data.nlbw : {};
-	const macs = new Set([...Object.keys(macacct), ...Object.keys(wifi), ...Object.keys(nlbw)]);
+	const hostRouters = hosts.success ? hosts.data : [];
+	// Per MAC, one reading per router that reports it, grouped by source.
+	type HostReading = CounterReading & {
+		lan?: { rx: number; tx: number };
+		wan?: { rx: number; tx: number };
+	};
+	const macacct: { [mac: string]: HostReading[] } = {};
+	const nlbw: { [mac: string]: HostReading[] } = {};
+	for (const { displayName, source, totals } of hostRouters) {
+		const into = source === 'macacct' ? macacct : nlbw;
+		for (const [mac, t] of Object.entries(totals)) {
+			(into[mac] ??= []).push({
+				id: displayName,
+				rx: t.rxBytes,
+				tx: t.txBytes,
+				lan: t.lan,
+				wan: t.wan
+			});
+		}
+	}
+	const macs = new Set([
+		...Object.keys(macacct),
+		...Object.keys(stations),
+		...Object.keys(nlbw)
+	]);
 
 	for (const mac of macs) {
-		const [source, counters] = macacct[mac]
+		const [source, readings] = macacct[mac]
 			? (['macacct', macacct[mac]] as const)
-			: wifi[mac]
-				? (['wifi', wifi[mac]] as const)
+			: stations[mac]
+				? ([
+						'wifi',
+						Object.entries(stations[mac]).map(([id, c]) => ({
+							id,
+							rx: c.rxBytes,
+							tx: c.txBytes
+						}))
+					] as const)
 				: (['nlbw', nlbw[mac]] as const);
-		const key = seriesKey('client', null, mac);
-		const prev = lastCounters.get(key);
-		lastCounters.set(key, {
-			rx: counters.rxBytes,
-			tx: counters.txBytes,
-			time: nowSec,
-			source
-		});
-		if (!prev || prev.source !== source) continue;
-		const dt = nowSec - prev.time;
-		const drx = counters.rxBytes - prev.rx;
-		const dtx = counters.txBytes - prev.tx;
-		// A decrease means the counters reset (node reboot, wifi reassociation,
-		// nlbwmon's monthly rollover): skip this sample, resume next tick.
-		if (dt <= 0 || drx < 0 || dtx < 0) continue;
-		rows.push(
-			await buildInterfaceRow(
-				'client',
-				null,
-				mac,
-				nowSec,
-				drx / dt,
-				dtx / dt,
-				wifi[mac]?.signal
-			)
+		const segments = clientCounters.segments(
+			seriesKey('client', null, mac),
+			source,
+			readings,
+			nowSec
 		);
+		await buildRateRows(out, 'client', null, mac, segments, nowSec, wifi[mac]?.signal);
 	}
 
 	// LAN / Internet breakdown (macacct >= 2 only): two more series per
-	// client, diffed independently, same reset handling. The same deltas also
-	// feed the network-wide LAN aggregate (Combined LAN): local = bytes delivered
-	// to clients from other LAN devices (each LAN-local frame counted once, at its
+	// client, diffed per router like the totals. The same segments also feed
+	// the network-wide LAN aggregate (Combined LAN): local = bytes delivered to
+	// clients from other LAN devices (each LAN-local frame counted once, at its
 	// destination); internet = both directions of clients' internet traffic.
-	let networkLocalBps = 0;
-	let networkInternetBps = 0;
-	let networkSamples = 0;
-	for (const [mac, counters] of Object.entries(macacct)) {
-		if (!counters.lan || !counters.wan) continue;
-		for (const [scope, pair] of [
-			['client_lan', counters.lan],
-			['client_wan', counters.wan]
-		] as const) {
-			const key = seriesKey(scope, null, mac);
-			const prev = lastCounters.get(key);
-			lastCounters.set(key, { rx: pair.rx, tx: pair.tx, time: nowSec, source: 'macacct' });
-			if (!prev) continue;
-			const dt = nowSec - prev.time;
-			const drx = pair.rx - prev.rx;
-			const dtx = pair.tx - prev.tx;
-			if (dt <= 0 || drx < 0 || dtx < 0) continue;
-			rows.push(await buildInterfaceRow(scope, null, mac, nowSec, drx / dt, dtx / dt));
-			if (scope === 'client_lan') {
-				networkLocalBps += drx / dt;
-			} else {
-				networkInternetBps += (drx + dtx) / dt;
+	// Column reuse for scope 'network' key 'lan': rx = LAN-local, tx = internet.
+	const networkSegments: Segment[] = [];
+	for (const [mac, readings] of Object.entries(macacct)) {
+		// Only when every router reporting the MAC splits (mixed macacct
+		// versions during a rollout would otherwise make lan + wan != total).
+		if (!readings.every((r) => r.lan && r.wan)) continue;
+		for (const scope of ['client_lan', 'client_wan'] as const) {
+			const pairs = readings.map((r) => ({
+				id: r.id,
+				...(scope === 'client_lan' ? r.lan! : r.wan!)
+			}));
+			const segments = clientCounters.segments(
+				seriesKey(scope, null, mac),
+				'macacct',
+				pairs,
+				nowSec
+			);
+			await buildRateRows(out, scope, null, mac, segments, nowSec);
+			for (const seg of segments) {
+				networkSegments.push(
+					scope === 'client_lan'
+						? { from: seg.from, rx: seg.rx, tx: 0 }
+						: { from: seg.from, rx: 0, tx: seg.rx + seg.tx }
+				);
 			}
-			networkSamples++;
 		}
 	}
-	if (networkSamples > 0) {
-		// Column reuse for scope 'network' key 'lan': rx = LAN-local, tx = internet.
-		rows.push(
-			await buildInterfaceRow('network', null, 'lan', nowSec, networkLocalBps, networkInternetBps)
-		);
-	}
+	await buildRateRows(out, 'network', null, 'lan', networkSegments, nowSec);
 
-	return rows;
+	return out;
 }
 
 async function fetchWifiRadioSnapshot(routers: RouterRow[]) {
@@ -440,19 +455,44 @@ async function rollupTier(
 		sourceTier,
 		targetTier,
 		stepSeconds,
+		sourceStepSeconds,
 		nowSec
 	}: {
 		sourceTier: MetricTier;
 		targetTier: '1m' | '5m' | '1h';
 		stepSeconds: number;
+		// Seconds each source row covers; null = raw, rows carry intervalSec.
+		sourceStepSeconds: number | null;
 		nowSec: number;
 	}
 ) {
-	const currentBucket = Math.floor(nowSec / stepSeconds);
-	const cursor = rollupCursors[targetTier];
+	const currentBucket = Math.floor((nowSec - ROLLUP_GRACE_SECONDS) / stepSeconds);
+	// Rates are time-weighted: a bucket's average is the bytes its rows cover
+	// divided by the bucket length, so a series present for part of a bucket
+	// (a client that just appeared, a gap) counts as zero for the rest - never
+	// its partial average stretched over the whole bucket. Totals then agree
+	// across tiers. Raw rows without intervalSec (older code) fall back to the
+	// plain average. Gauges (signal, client count, noise) stay plain averages.
+	const weighted = (column: typeof metricSampleTable.rxAvg | typeof metricSampleTable.txAvg) =>
+		sourceStepSeconds === null
+			? sql<number>`case when count(${metricSampleTable.intervalSec}) = count(*) then sum(${column} * ${metricSampleTable.intervalSec}) / ${stepSeconds} else avg(${column}) end`
+			: sql<number>`sum(${column}) * ${sourceStepSeconds} / ${stepSeconds}`;
+	let cursor = rollupCursors[targetTier];
 	if (cursor === null) {
-		rollupCursors[targetTier] = currentBucket;
-		return;
+		// After a restart, resume after the newest bucket already rolled up -
+		// neither redo it (duplicate rows) nor skip the ones still pending.
+		const [latest] = await tx
+			.select({ timestamp: max(metricSampleTable.timestamp) })
+			.from(metricSampleTable)
+			.where(eq(metricSampleTable.tier, targetTier));
+		cursor =
+			latest?.timestamp != null
+				? Math.max(
+						Math.floor(latest.timestamp / stepSeconds) + 1,
+						currentBucket - MAX_CATCHUP_BUCKETS
+					)
+				: currentBucket;
+		rollupCursors[targetTier] = cursor;
 	}
 	if (currentBucket <= cursor) return;
 
@@ -463,9 +503,9 @@ async function rollupTier(
 		const rows = await tx
 			.select({
 				seriesId: metricSampleTable.seriesId,
-				rxAvg: avg(metricSampleTable.rxAvg),
+				rxAvg: weighted(metricSampleTable.rxAvg),
 				rxMax: max(metricSampleTable.rxMax),
-				txAvg: avg(metricSampleTable.txAvg),
+				txAvg: weighted(metricSampleTable.txAvg),
 				txMax: max(metricSampleTable.txMax),
 				signalAvg: avg(metricSampleTable.signalAvg),
 				signalMin: min(metricSampleTable.signalMin),
@@ -576,7 +616,7 @@ export async function collectTick() {
 			wanFailoverRows = await fetchWanFailoverStateRows(routers.data);
 		}
 
-		let clientRadioRows: PendingRow[] = [];
+		let clientRadioRows: SampleRows = { rows: [], updates: [] };
 		if (tickCount % CLIENT_POLL_EVERY_N_TICKS === 0) {
 			clientRadioRows = await computeClientAndRadioSampleRows(
 				routers.data,
@@ -587,9 +627,32 @@ export async function collectTick() {
 		// Write phase - everything below is pure DB work, batched into one
 		// transaction so it fsyncs once instead of once per statement.
 		await db.transaction(async (tx) => {
-			const allSampleRows = [...interfaceRows, ...clientRadioRows];
+			const allSampleRows = [...interfaceRows.rows, ...clientRadioRows.rows];
 			if (allSampleRows.length) {
 				await tx.insert(metricSampleTable).values(allSampleRows);
+			}
+			// A node that came back after missed polls: add its rate to the raw
+			// rows already written for the span it covers, each by the share of
+			// its own interval inside (from, to].
+			for (const u of [...interfaceRows.updates, ...clientRadioRows.updates]) {
+				const share = sql`((${metricSampleTable.timestamp} - max(${metricSampleTable.timestamp} - ${metricSampleTable.intervalSec}, ${u.from})) * 1.0 / ${metricSampleTable.intervalSec})`;
+				await tx
+					.update(metricSampleTable)
+					.set({
+						rxAvg: sql`${metricSampleTable.rxAvg} + ${u.rx} * ${share}`,
+						rxMax: sql`${metricSampleTable.rxMax} + ${u.rx} * ${share}`,
+						txAvg: sql`${metricSampleTable.txAvg} + ${u.tx} * ${share}`,
+						txMax: sql`${metricSampleTable.txMax} + ${u.tx} * ${share}`
+					})
+					.where(
+						and(
+							eq(metricSampleTable.seriesId, u.seriesId),
+							eq(metricSampleTable.tier, 'raw'),
+							sql`${metricSampleTable.intervalSec} > 0`,
+							sql`${metricSampleTable.timestamp} > ${u.from}`,
+							lte(metricSampleTable.timestamp, u.to)
+						)
+					);
 			}
 
 			if (radioSnapshot) {
@@ -663,18 +726,21 @@ export async function collectTick() {
 				sourceTier: 'raw',
 				targetTier: '1m',
 				stepSeconds: 60,
+				sourceStepSeconds: null,
 				nowSec
 			});
 			await rollupTier(tx, {
 				sourceTier: '1m',
 				targetTier: '5m',
 				stepSeconds: 300,
+				sourceStepSeconds: 60,
 				nowSec
 			});
 			await rollupTier(tx, {
 				sourceTier: '5m',
 				targetTier: '1h',
 				stepSeconds: 3600,
+				sourceStepSeconds: 300,
 				nowSec
 			});
 			if (tickCount % PRUNE_EVERY_N_TICKS === 0) {

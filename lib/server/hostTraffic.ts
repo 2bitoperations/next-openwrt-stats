@@ -36,9 +36,15 @@ const COMMANDS: Record<HostSource, { command: string; params: string[] }> = {
 // permission error, which ubusCall treats as an expired session and answers
 // with a fresh login - on every poll. So probe once without retry, cache the
 // answer, and only re-probe a router with no source every few minutes (picks
-// up a package installed later).
+// up a package installed later). A router whose known source stops answering
+// keeps it until it has failed for REPROBE_SECONDS: one timeout (and the
+// backoff after it) must not make a macacct node count as "no source" for the
+// next 5 minutes.
 const REPROBE_SECONDS = 300;
-const routerSources = new Map<string, { source: HostSource | null; checkedAt: number }>();
+const routerSources = new Map<
+	string,
+	{ source: HostSource | null; checkedAt: number; failingSince?: number }
+>();
 
 async function readTotals(
 	displayName: string,
@@ -90,8 +96,13 @@ async function routerTotals(
 	const known = routerSources.get(displayName);
 	if (known?.source) {
 		const totals = await readTotals(displayName, known.source, true);
-		if (totals) return { source: known.source, totals };
-		routerSources.delete(displayName); // package removed or broken - re-probe next poll
+		if (totals) {
+			known.failingSince = undefined;
+			return { source: known.source, totals };
+		}
+		known.failingSince ??= nowSec;
+		// Package removed or broken (not just a missed poll) - re-probe next poll.
+		if (nowSec - known.failingSince >= REPROBE_SECONDS) routerSources.delete(displayName);
 		return null;
 	}
 	if (known && nowSec - known.checkedAt < REPROBE_SECONDS) return null;
@@ -107,46 +118,25 @@ async function routerTotals(
 	return null;
 }
 
-// Totals per MAC, summed across routers, kept separate per source so the
-// caller can pick one basis per client (never add macacct and nlbw for the
-// same MAC: nlbw on a router counts the routed share of traffic that a
-// downstream node's macacct already counted).
+// Each router's own per-MAC totals, NOT summed across routers: the caller
+// diffs every router's counter separately (see counterDiff.ts) - a sum jumps
+// by a router's whole counter whenever that router misses a poll and comes
+// back. Never use macacct and nlbw for the same MAC: nlbw on a router counts
+// the routed share of traffic that a downstream node's macacct already counted.
+export type RouterHostTotals = { displayName: string; source: HostSource; totals: Totals };
 export async function getHostTrafficTotals() {
 	const allRouters = await getRouters();
 	if (!allRouters.success) return allRouters;
 
 	const nowSec = Math.floor(Date.now() / 1000);
-	const bySource: Record<HostSource, Totals> = { macacct: {}, nlbw: {} };
-	// A MAC's LAN/Internet split is only kept if every router reporting that
-	// MAC provides one (mixed macacct versions during a rollout would
-	// otherwise make lan + wan != total).
-	const splitMissing = new Set<string>();
-	const addPair = (into: Pair | undefined, add: Pair): Pair => ({
-		rx: (into?.rx ?? 0) + add.rx,
-		tx: (into?.tx ?? 0) + add.tx
-	});
-	await Promise.all(
-		allRouters.data.map(async (router) => {
+	const results = await Promise.all(
+		allRouters.data.map(async (router): Promise<RouterHostTotals | null> => {
 			const result = await routerTotals(router.displayName, nowSec);
-			if (!result) return;
-			const totals = bySource[result.source];
-			for (const [mac, t] of Object.entries(result.totals)) {
-				totals[mac] ??= { rxBytes: 0, txBytes: 0 };
-				totals[mac].rxBytes += t.rxBytes;
-				totals[mac].txBytes += t.txBytes;
-				if (t.lan && t.wan) {
-					totals[mac].lan = addPair(totals[mac].lan, t.lan);
-					totals[mac].wan = addPair(totals[mac].wan, t.wan);
-				} else {
-					splitMissing.add(`${result.source}|${mac}`);
-				}
-			}
+			return result && { displayName: router.displayName, ...result };
 		})
 	);
-	for (const key of splitMissing) {
-		const [source, mac] = key.split('|') as [HostSource, string];
-		delete bySource[source][mac].lan;
-		delete bySource[source][mac].wan;
-	}
-	return { success: true, data: bySource } as const;
+	return {
+		success: true,
+		data: results.filter((r): r is RouterHostTotals => r !== null)
+	} as const;
 }

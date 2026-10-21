@@ -135,7 +135,10 @@ export const metricSampleTable = sqliteTable(
 		signalMin: real(), // client/radio scope, dBm (worst case)
 		clientCountAvg: real(), // radio scope only
 		clientCountMax: real(), // radio scope only
-		noiseAvg: real() // radio scope only, dBm
+		noiseAvg: real(), // radio scope only, dBm
+		// Seconds the rx/tx averages cover (raw tier; rollup rows cover their
+		// bucket). Null on radio rows and on rows written before 2026-10-21.
+		intervalSec: real()
 	},
 	(table) => [
 		index('metric_sample_lookup').on(
