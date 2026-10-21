@@ -16,10 +16,10 @@ import {
 } from './ui/chart';
 import { LoaderCircle } from 'lucide-react';
 import {
-	RANGE_OPTIONS,
 	RangePicker,
 	useMetricHistory,
-	BandwidthHistoryChart
+	BandwidthHistoryChart,
+	DEFAULT_RANGE_SECONDS
 } from './BandwidthHistoryChart';
 import { WifiRadio } from '@/lib/server/wifiAPs';
 
@@ -49,7 +49,7 @@ function ClientCountChart({
 	ifname: string;
 }) {
 	const [rangeSeconds, setRangeSeconds] = useState<number>(
-		RANGE_OPTIONS[1].seconds
+		DEFAULT_RANGE_SECONDS
 	);
 	const query = useMetricHistory({
 		scope: 'radio',
@@ -128,7 +128,7 @@ function SignalNoiseChart({
 	ifname: string;
 }) {
 	const [rangeSeconds, setRangeSeconds] = useState<number>(
-		RANGE_OPTIONS[1].seconds
+		DEFAULT_RANGE_SECONDS
 	);
 	const query = useMetricHistory({
 		scope: 'radio',
@@ -213,7 +213,7 @@ export function RadioHistoryDialog({
 }) {
 	const [open, setOpen] = useState(false);
 	const [rangeSeconds, setRangeSeconds] = useState<number>(
-		RANGE_OPTIONS[1].seconds
+		DEFAULT_RANGE_SECONDS
 	);
 	const isMesh = radio.mode === 'mesh';
 

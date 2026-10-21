@@ -7,7 +7,7 @@ import {
 	DialogTitle,
 	DialogTrigger
 } from '@/components/ui/dialog';
-import { BandwidthHistoryChart, RANGE_OPTIONS, RangePicker } from './BandwidthHistoryChart';
+import { BandwidthHistoryChart, RangePicker, DEFAULT_RANGE_SECONDS } from './BandwidthHistoryChart';
 import { SignalHistoryChart } from './SignalHistoryChart';
 
 export function ClientHistoryDialog({
@@ -22,7 +22,7 @@ export function ClientHistoryDialog({
 	children: React.ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
-	const [rangeSeconds, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
+	const [rangeSeconds, setRangeSeconds] = useState<number>(DEFAULT_RANGE_SECONDS);
 	const chartClass = 'aspect-auto h-[160px] w-full sm:h-[200px]';
 	const noSplit =
 		'No LAN / Internet breakdown yet - needs macacct 2+ on the node this client is attached to';

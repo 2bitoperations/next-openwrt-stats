@@ -35,6 +35,9 @@ export const RANGE_OPTIONS = [
 	{ label: '1m', seconds: 30 * 24 * 60 * 60 },
 	{ label: '1y', seconds: 365 * 24 * 60 * 60 }
 ] as const;
+// Charts open on 5m: it reads the raw tier, which is live; longer ranges read
+// rollups, which lag ~2.5-3.5 min (they wait for late counter updates).
+export const DEFAULT_RANGE_SECONDS = RANGE_OPTIONS[0].seconds;
 
 export const chartConfig = {
 	rxAvg: { label: 'Download', color: 'var(--chart-1)' },
@@ -160,7 +163,7 @@ export function BandwidthHistoryChart({
 	// for series whose two parts add up to something meaningful (Combined LAN).
 	stacked?: boolean;
 }) {
-	const [ownRange, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
+	const [ownRange, setRangeSeconds] = useState<number>(DEFAULT_RANGE_SECONDS);
 	const timeRange = useTimeRange();
 	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;
 	const showOwnPicker = controlledRange === undefined && !timeRange;

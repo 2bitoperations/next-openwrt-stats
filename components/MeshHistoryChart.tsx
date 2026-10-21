@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { LoaderCircle } from 'lucide-react';
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from './ui/chart';
-import { RANGE_OPTIONS, RangePicker, estimateBucketSeconds, windowTicks } from './BandwidthHistoryChart';
+import { RangePicker, estimateBucketSeconds, windowTicks, DEFAULT_RANGE_SECONDS } from './BandwidthHistoryChart';
 import { formatBitrate, formatBytes } from '@/lib/utils';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import type { MeshHistory } from '@/lib/server/metrics';
@@ -13,7 +13,7 @@ import type { MeshHistory } from '@/lib/server/metrics';
 // Combined Mesh: one stacked area per router = what that router's mesh radios
 // transmit (bytes/s). The stack height is the total airtime load on the mesh.
 export function MeshHistoryChart({ rangeSeconds: controlledRange }: { rangeSeconds?: number }) {
-	const [ownRange, setRangeSeconds] = useState<number>(RANGE_OPTIONS[1].seconds);
+	const [ownRange, setRangeSeconds] = useState<number>(DEFAULT_RANGE_SECONDS);
 	const timeRange = useTimeRange();
 	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;
 	const showOwnPicker = controlledRange === undefined && !timeRange;

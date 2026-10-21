@@ -5,7 +5,7 @@ import {
 	useState,
 	ReactNode
 } from 'react';
-import { RANGE_OPTIONS } from '@/components/BandwidthHistoryChart';
+import { DEFAULT_RANGE_SECONDS } from '@/components/BandwidthHistoryChart';
 
 type TimeRangeContextType = {
 	rangeSeconds: number;
@@ -18,7 +18,7 @@ const TimeRangeContext = createContext<TimeRangeContextType | undefined>(
 
 export function TimeRangeProvider({ children }: { children: ReactNode }) {
 	const [rangeSeconds, setRangeSeconds] = useState<number>(
-		RANGE_OPTIONS[1].seconds
+		DEFAULT_RANGE_SECONDS
 	);
 
 	return (

@@ -9,7 +9,7 @@ import {
 	ChartTooltipContent
 } from './ui/chart';
 import { LoaderCircle } from 'lucide-react';
-import { RANGE_OPTIONS, RangePicker, useMetricHistory } from './BandwidthHistoryChart';
+import { RangePicker, useMetricHistory, DEFAULT_RANGE_SECONDS } from './BandwidthHistoryChart';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import { formatBand } from '@/lib/utils';
 import { PresenceSegments } from '@/app/api/presence/[mac]/segments/route';
@@ -64,7 +64,7 @@ export function SignalHistoryChart({
 	rangeSeconds?: number;
 }) {
 	const [ownRange, setRangeSeconds] = useState<number>(
-		RANGE_OPTIONS[1].seconds
+		DEFAULT_RANGE_SECONDS
 	);
 	const timeRange = useTimeRange();
 	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;

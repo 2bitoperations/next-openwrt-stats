@@ -9,9 +9,9 @@ import {
 	ChartTooltipContent
 } from './ui/chart';
 import {
-	RANGE_OPTIONS,
 	RangePicker,
-	estimateBucketSeconds
+	estimateBucketSeconds,
+	DEFAULT_RANGE_SECONDS
 } from './BandwidthHistoryChart';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import { formatBitrate, formatBytes } from '@/lib/utils';
@@ -57,7 +57,7 @@ export function InterfaceBreakdownChart({
 	rangeSeconds?: number;
 }) {
 	const [ownRange, setRangeSeconds] = useState<number>(
-		RANGE_OPTIONS[1].seconds
+		DEFAULT_RANGE_SECONDS
 	);
 	const timeRange = useTimeRange();
 	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;
