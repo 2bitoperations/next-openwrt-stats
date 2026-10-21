@@ -72,3 +72,12 @@ network's background traffic is ~5-35 Mb/s). Expected = bytes on the wire (+2-8 
 - T9: max client sample since deploy 120 Mb/s; Combined LAN internet = 100.5 % of WAN over 10 min.
 - Not run: T3 (smudgefinder-mini's SSH host key changed - not overridden), T7 (needs someone to move
   a device).
+
+## Follow-ups (same day)
+- Charts open on the 5m range (`DEFAULT_RANGE_SECONDS`): it reads the raw tier, so it has no rollup lag.
+- Ranges served from the raw tier (<= 10 min) come back as 5 s averages (`resampleRawRows`): each
+  raw row's bytes are split across 5 s buckets by overlap, so totals are unchanged and series polled
+  at different moments share timestamps. Checked live: kitchen `phy0.1-ap0` over 4 min, API 19.099 MB
+  = raw 19.099 MB; range 0.08-8.72 Mb/s (1 s) -> 0.08-3.42 Mb/s (5 s). The 1 s noise was real
+  traffic (mostly fatso-linux's ssh/API bursts), not a counter artifact: kitchen's Wi-Fi counters
+  advance per frame.

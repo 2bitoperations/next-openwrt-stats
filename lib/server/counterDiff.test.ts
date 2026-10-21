@@ -4,6 +4,8 @@ import {
 	ClientCounterTracker,
 	SeriesRowBuilder,
 	MAX_PLAUSIBLE_BYTES_PER_SEC,
+	resampleRawRows,
+	type RawSample,
 	type CounterReading,
 	type RateRow
 } from './counterDiff';
@@ -206,5 +208,48 @@ const K = 82_759_687_376; // kitchen's lifetime counter for Fancypants, 2026-10-
 	s.tick('macacct', [{ id: 'a', rx: 5e6, tx: 0 }], 125);
 	s.tick('macacct', [{ id: 'a', rx: 10e6, tx: 0 }], 130);
 	close([...s.rollup1m().values()].reduce((a, b) => a + b, 0) * 60, 10e6);
+}
+// 10. Resampling to 5 s: bursty 1 s rows average out, bytes are conserved,
+//     irregular rows (7 s, 3 s) split by overlap, partial edge buckets dropped.
+{
+	const row = (
+		timestamp: number,
+		intervalSec: number,
+		rate: number,
+		signal?: number
+	): RawSample => ({
+		timestamp,
+		intervalSec,
+		rxAvg: rate,
+		rxMax: rate,
+		txAvg: 0,
+		txMax: 0,
+		signalAvg: signal ?? null
+	});
+	const burst = Array.from({ length: 20 }, (_, i) =>
+		row(101 + i, 1, i % 2 ? 9000 : 1000)
+	);
+	const out = resampleRawRows(burst, 100);
+	assert.deepEqual(
+		out.map((p) => p.timestamp),
+		[105, 110, 115, 120]
+	);
+	close(
+		out.reduce((s, p) => s + p.rxAvg * 5, 0),
+		burst.reduce((s, r) => s + r.rxAvg, 0)
+	);
+	assert.ok(out.every((p) => p.rxAvg >= 4000 && p.rxAvg <= 6000)); // was 1000..9000
+	assert.equal(out[0].rxMax, 9000);
+
+	const irregular = [row(107, 7, 700, -60), row(110, 3, 300, -70)];
+	const r2 = resampleRawRows(irregular, 100);
+	assert.deepEqual(
+		r2.map((p) => p.timestamp),
+		[105, 110]
+	);
+	close(r2[0].rxAvg, 700); // (100,105] fully inside the 7 s row
+	close(r2[1].rxAvg, (700 * 2 + 300 * 3) / 5);
+	assert.equal(r2[1].signalAvg, -65); // both rows end in (105,110]
+	assert.equal(resampleRawRows([row(103, 3, 1)], 100).length, 0); // no whole bucket yet
 }
 console.log('counterDiff: all tests passed');

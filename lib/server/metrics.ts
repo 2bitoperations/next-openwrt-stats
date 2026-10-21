@@ -20,6 +20,8 @@ import {
 	MAX_SPAN_SECONDS,
 	SeriesRowBuilder,
 	counterSegment,
+	resampleRawRows,
+	RAW_CHART_STEP_SECONDS,
 	type CounterReading,
 	type RateUpdate,
 	type Segment
@@ -858,6 +860,7 @@ export async function queryHistory({
 	const tier = pickTier(to - from);
 
 	try {
+		if (tier === 'raw') return await queryRawHistory({ scope, key, routerId, combined, from, to });
 		if (combined) {
 			const seriesRows = await db
 				.select({ id: metricSeriesTable.id })
@@ -949,6 +952,96 @@ export async function queryHistory({
 			errorMessage: 'Failed to query metric history'
 		} as const;
 	}
+}
+
+// Ranges served from the raw tier (<= 10 min) come back as 5 s averages:
+// 1 s interface samples are too spiky to read, and fixed buckets line up
+// series polled at different moments (combined and stacked charts).
+async function queryRawHistory({
+	scope,
+	key,
+	routerId,
+	combined,
+	from,
+	to
+}: {
+	scope: MetricScopeName;
+	key: string;
+	routerId?: number;
+	combined?: boolean;
+	from: number;
+	to: number;
+}) {
+	const seriesRows = await db
+		.select({ id: metricSeriesTable.id })
+		.from(metricSeriesTable)
+		.where(
+			and(
+				eq(metricSeriesTable.scope, scope),
+				eq(metricSeriesTable.key, key),
+				combined
+					? undefined
+					: routerId === undefined
+						? sql`${metricSeriesTable.routerId} is null`
+						: eq(metricSeriesTable.routerId, routerId)
+			)
+		);
+	const seriesIds = seriesRows.map((r) => r.id);
+	if (!seriesIds.length) return { success: true, data: [] as MetricHistoryPoint[] } as const;
+
+	const rows = await db
+		.select({
+			seriesId: metricSampleTable.seriesId,
+			timestamp: metricSampleTable.timestamp,
+			intervalSec: metricSampleTable.intervalSec,
+			rxAvg: metricSampleTable.rxAvg,
+			rxMax: metricSampleTable.rxMax,
+			txAvg: metricSampleTable.txAvg,
+			txMax: metricSampleTable.txMax,
+			signalAvg: metricSampleTable.signalAvg,
+			signalMin: metricSampleTable.signalMin,
+			clientCountAvg: metricSampleTable.clientCountAvg,
+			clientCountMax: metricSampleTable.clientCountMax,
+			noiseAvg: metricSampleTable.noiseAvg
+		})
+		.from(metricSampleTable)
+		.where(
+			and(
+				inArray(metricSampleTable.seriesId, seriesIds),
+				eq(metricSampleTable.tier, 'raw'),
+				// A row's span reaches back up to a bucket before its timestamp.
+				gte(metricSampleTable.timestamp, from - RAW_CHART_STEP_SECONDS),
+				lte(metricSampleTable.timestamp, to)
+			)
+		)
+		.orderBy(metricSampleTable.seriesId, metricSampleTable.timestamp);
+
+	const bySeries = new Map<number, typeof rows>();
+	for (const row of rows) {
+		const list = bySeries.get(row.seriesId) ?? [];
+		list.push(row);
+		bySeries.set(row.seriesId, list);
+	}
+	const perSeries = [...bySeries.values()].map((list) => resampleRawRows(list, from));
+	if (!combined) {
+		return { success: true, data: (perSeries[0] ?? []) as MetricHistoryPoint[] } as const;
+	}
+	// Combined: sum the routers' buckets, like the rollup tiers' combined query.
+	const summed = new Map<number, MetricHistoryPoint>();
+	for (const points of perSeries) {
+		for (const p of points) {
+			const acc = summed.get(p.timestamp) ?? { timestamp: p.timestamp, rxAvg: 0, rxMax: 0, txAvg: 0, txMax: 0 };
+			acc.rxAvg += p.rxAvg;
+			acc.rxMax += p.rxMax;
+			acc.txAvg += p.txAvg;
+			acc.txMax += p.txMax;
+			summed.set(p.timestamp, acc);
+		}
+	}
+	return {
+		success: true,
+		data: [...summed.values()].sort((a, b) => a.timestamp - b.timestamp)
+	} as const;
 }
 
 export type CachedDhcpLeases = Awaited<ReturnType<typeof getCachedDhcpLeases>>;

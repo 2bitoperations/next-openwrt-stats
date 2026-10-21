@@ -153,3 +153,100 @@ export class SeriesRowBuilder {
 		return { rows, updates };
 	}
 }
+
+// ---- Reading raw rows back: fixed 5 s buckets for charts ----
+
+export const RAW_CHART_STEP_SECONDS = 5;
+
+export type RawSample = {
+	timestamp: number;
+	intervalSec: number | null;
+	rxAvg: number;
+	rxMax: number;
+	txAvg: number;
+	txMax: number;
+	signalAvg?: number | null;
+	signalMin?: number | null;
+	clientCountAvg?: number | null;
+	clientCountMax?: number | null;
+	noiseAvg?: number | null;
+};
+
+// Resamples one series' raw rows (sorted by timestamp) into STEP-second
+// buckets, each stamped with its end. Each row's bytes are split across the
+// buckets its span (timestamp - intervalSec, timestamp] overlaps, so a bucket's
+// rate is the bytes it covers / STEP (totals unchanged), and series sampled at
+// different times (1 s interfaces, ~5 s clients) land on the same timestamps.
+// Maxes are the max of the overlapping rows; gauges (signal, client count,
+// noise) average the rows that end in the bucket. Only whole buckets inside
+// (from, last row] are returned.
+export function resampleRawRows(
+	rows: RawSample[],
+	from: number,
+	step = RAW_CHART_STEP_SECONDS
+) {
+	type Bucket = {
+		rx: number;
+		tx: number;
+		rxMax: number;
+		txMax: number;
+		gauges: RawSample[];
+	};
+	const buckets = new Map<number, Bucket>();
+	const bucketAt = (k: number) => {
+		let b = buckets.get(k);
+		if (!b) {
+			b = { rx: 0, tx: 0, rxMax: 0, txMax: 0, gauges: [] };
+			buckets.set(k, b);
+		}
+		return b;
+	};
+	for (const row of rows) {
+		const end = row.timestamp;
+		const start = end - (row.intervalSec ?? 0);
+		bucketAt(Math.ceil(end / step)).gauges.push(row);
+		for (let k = Math.floor(start / step) + 1; k * step - step < end; k++) {
+			const overlap =
+				Math.min(end, k * step) - Math.max(start, k * step - step);
+			if (overlap <= 0) continue;
+			const b = bucketAt(k);
+			b.rx += row.rxAvg * overlap;
+			b.tx += row.txAvg * overlap;
+			b.rxMax = Math.max(b.rxMax, row.rxMax);
+			b.txMax = Math.max(b.txMax, row.txMax);
+		}
+	}
+	const last = rows.length ? rows[rows.length - 1].timestamp : -Infinity;
+	const mean = (values: (number | null | undefined)[]) => {
+		const v = values.filter((x): x is number => x !== null && x !== undefined);
+		return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+	};
+	const pick = (
+		values: (number | null | undefined)[],
+		f: (...v: number[]) => number
+	) => {
+		const v = values.filter((x): x is number => x !== null && x !== undefined);
+		return v.length ? f(...v) : null;
+	};
+	return [...buckets.entries()]
+		.filter(([k]) => k * step - step >= from && k * step <= last)
+		.sort((a, b) => a[0] - b[0])
+		.map(([k, b]) => ({
+			timestamp: k * step,
+			rxAvg: b.rx / step,
+			rxMax: b.rxMax,
+			txAvg: b.tx / step,
+			txMax: b.txMax,
+			signalAvg: mean(b.gauges.map((g) => g.signalAvg)),
+			signalMin: pick(
+				b.gauges.map((g) => g.signalMin),
+				Math.min
+			),
+			clientCountAvg: mean(b.gauges.map((g) => g.clientCountAvg)),
+			clientCountMax: pick(
+				b.gauges.map((g) => g.clientCountMax),
+				Math.max
+			),
+			noiseAvg: mean(b.gauges.map((g) => g.noiseAvg))
+		}));
+}
