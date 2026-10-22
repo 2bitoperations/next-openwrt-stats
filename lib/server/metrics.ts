@@ -1316,6 +1316,51 @@ export type ClientRecentSeries = Awaited<ReturnType<typeof getClientRecentSeries
 
 const LATEST_RATE_STALE_AFTER_SECONDS = 15;
 
+export type LatestInterfaceRate = Awaited<ReturnType<typeof getLatestInterfaceRate>>;
+// The Realtime Traffic card: the newest of the collector's 1 s interface
+// samples, instead of a luci.getRealtimeStats call (~3.7 KB) to the router per
+// viewer per second. Same view as before: the router's own rx/tx on `device`.
+export async function getLatestInterfaceRate(device: string, displayName?: string) {
+	const routers = await getRoutersWithId();
+	if (!routers.success) return routers;
+	const router = routers.data.find((r) =>
+		displayName ? r.displayName === displayName : r.isPrimary === 1
+	);
+	if (!router) return { success: false, errorMessage: 'Router not found' } as const;
+	// A `wan` port bridged into br-lan is recorded as wan-bridged (collectTick).
+	const keys = device === 'wan' ? ['wan', 'wan-bridged'] : [device];
+	try {
+		const rows = await db
+			.select({ rxAvg: metricSampleTable.rxAvg, txAvg: metricSampleTable.txAvg })
+			.from(metricSampleTable)
+			.innerJoin(metricSeriesTable, eq(metricSeriesTable.id, metricSampleTable.seriesId))
+			.where(
+				and(
+					eq(metricSeriesTable.scope, 'interface'),
+					eq(metricSeriesTable.routerId, router.id),
+					inArray(metricSeriesTable.key, keys),
+					eq(metricSampleTable.tier, 'raw'),
+					gte(metricSampleTable.timestamp, Math.floor(Date.now() / 1000) - LATEST_RATE_STALE_AFTER_SECONDS)
+				)
+			)
+			.orderBy(sql`${metricSampleTable.timestamp} desc`)
+			.limit(1);
+		if (!rows.length) {
+			return { success: false, errorMessage: 'No recent samples for this interface' } as const;
+		}
+		return {
+			success: true,
+			data: {
+				rxMbps: ((Number(rows[0].rxAvg) || 0) * 8) / 1_000_000,
+				txMbps: ((Number(rows[0].txAvg) || 0) * 8) / 1_000_000
+			}
+		} as const;
+	} catch (error) {
+		logError({ errorMessage: 'Failed to get latest interface rate', error });
+		return { success: false, errorMessage: 'Failed to get latest interface rate' } as const;
+	}
+}
+
 export type ClientLatestRates = Awaited<ReturnType<typeof getClientLatestRates>>;
 export async function getClientLatestRates() {
 	try {

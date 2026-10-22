@@ -1,14 +1,12 @@
 import 'server-only';
 import {
 	getNetworkInterfacesSchema,
-	getRealTimeStatsSchema,
 	devstatsSchema,
 	networkDeviceStatusSchema,
 	wireguardInterfacesSchema,
 	wireguardPeerConfigArraySchema
 } from '@/types/ubusCalls';
 import { ubusBatchCall, ubusCall } from './ubusCalls';
-import { calcMbps } from '../utils';
 import { getPrimaryRouter } from './router';
 import { logError } from '../client/errorLog';
 
@@ -62,71 +60,6 @@ export async function getNetworkInterfaces(displayName?: string) {
 			data: parsedUbusResponse.data.result[1].interface.filter(
 				(i) => i.device !== 'lo'
 			)
-		} as const;
-	}
-
-	return {
-		success: false,
-		errorMessage: 'Failed to parse ubus response'
-	} as const;
-}
-
-export type RealTimeTraffic = Awaited<ReturnType<typeof getRealTimeTraffic>>;
-export async function getRealTimeTraffic(device: string, displayName?: string) {
-	const router = displayName
-		? { success: true, data: { displayName } } as const
-		: await getPrimaryRouter();
-	if (!router.success) {
-		return router;
-	}
-
-	const ubusResponse = await ubusCall({
-		displayName: router.data.displayName,
-		params: [
-			'luci',
-			'getRealtimeStats',
-			{
-				device: device,
-				mode: 'interface'
-			}
-		]
-	});
-
-	if (!ubusResponse.success) {
-		logError({
-			displayName: router.data.displayName,
-			errorMessage: 'Failed to get real time traffic',
-			...ubusResponse
-		});
-		return {
-			success: false,
-			errorMessage: 'Something went wrong while getting the real time traffic.'
-		} as const;
-	}
-
-	const parsedUbusResponse = getRealTimeStatsSchema.safeParse(
-		ubusResponse.data
-	);
-
-	if (!parsedUbusResponse.success) {
-		logError({
-			displayName: router.data.displayName,
-			errorMessage: 'Failed to parse real-time traffic stats response',
-			zodError: parsedUbusResponse.error,
-			...ubusResponse
-		});
-		return {
-			success: false,
-			errorMessage: 'Failed to parse ubus response'
-		} as const;
-	}
-
-	if (parsedUbusResponse.data.result) {
-		const reversdData = parsedUbusResponse.data.result[1].result.toReversed();
-		const traffic = calcMbps(reversdData[1], reversdData[0]);
-		return {
-			success: true,
-			data: traffic
 		} as const;
 	}
 

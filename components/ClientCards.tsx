@@ -11,10 +11,9 @@ import {
 	UserIcon,
 	WifiIcon
 } from 'lucide-react';
-import { WifiClients, WifiClientsTraffic } from '@/lib/server/wifiAPs';
+import { WifiClients } from '@/lib/server/wifiAPs';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
-	calcMbps,
 	cn,
 	formatBand,
 	formatBitrate,
@@ -32,7 +31,7 @@ import {
 	SelectTrigger,
 	SelectValue
 } from './ui/select';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
 import { ClientProtocolHoverCard } from './ClientProtocolHoverCard';
@@ -189,27 +188,6 @@ export default function ClientCards({
 		},
 		enabled: Object.keys(wifiAPsIfname).length > 0
 	});
-	const wifiClientsTrafficQuery = useQuery({
-		queryKey: ['wifiClientsTraffic'],
-		queryFn: async () => {
-			const wifiClientsTraffic = await fetch(
-				'/api/routers/all/wifi/clients/traffic',
-				{
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json'
-					},
-					body: JSON.stringify({ ifnames: wifiAPsIfname })
-				}
-			).then((res) => res.json() as Promise<WifiClientsTraffic>);
-			if (!wifiClientsTraffic.success) {
-				throw new Error(wifiClientsTraffic.errorMessage);
-			}
-			return wifiClientsTraffic.data;
-		},
-		refetchInterval: 3000,
-		enabled: Object.keys(wifiAPsIfname).length > 0
-	});
 
 	const bandwidthWindowSeconds = BANDWIDTH_WINDOW_SECONDS[sortKey];
 	const bandwidthSummaryQuery = useQuery({
@@ -226,10 +204,8 @@ export default function ClientCards({
 		refetchInterval: 30_000
 	});
 
-	// Wired (and any other non-wifi) clients only get a new number once per
-	// collector tick (~5s) - there's no sub-5s "live" data for them even in
-	// principle, so this polls the most recent collected sample instead of
-	// computing a delta client-side the way the true-live wifi poll does.
+	// Every client's current rate: the collector's most recent sample (one per
+	// ~5 s tick), wired and wifi alike.
 	const clientLatestRatesQuery = useQuery({
 		queryKey: ['clientLatestRates'],
 		queryFn: async () => {
@@ -288,16 +264,13 @@ export default function ClientCards({
 	}, [clientRecentSeriesQuery.data, dhcpDevicesQuery.data]);
 
 	// Rates are computed here (not per-card) so the list can sort by bandwidth.
-	const prevTrafficRef = useRef<
-		Map<string, { rxBytes: number; txBytes: number; time: number }>
-	>(new Map());
-	const [wifiRates, setWifiRates] = useState<Map<string, Rate>>(new Map());
-
+	// Every client's rate - wifi included - is the collector's latest sample
+	// (~5 s). Wifi clients used to get a "live" rate from their own 3 s poll of
+	// every AP, which cost each open dashboard ~20 KB/s of router traffic.
 	const rates = useMemo(() => {
-		const merged = new Map<string, Rate>(wifiRates);
+		const merged = new Map<string, Rate>();
 		if (clientLatestRatesQuery.data) {
 			for (const [mac, data] of Object.entries(clientLatestRatesQuery.data)) {
-				if (merged.has(mac)) continue; // true-live wifi rate wins if present
 				merged.set(mac, {
 					rxMbps: (data.rxAvg * 8) / 1_000_000,
 					txMbps: (data.txAvg * 8) / 1_000_000
@@ -305,25 +278,7 @@ export default function ClientCards({
 			}
 		}
 		return merged;
-	}, [wifiRates, clientLatestRatesQuery.data]);
-
-	useEffect(() => {
-		if (!wifiClientsTrafficQuery.data) return;
-		const prevMap = prevTrafficRef.current;
-		const newRates = new Map<string, Rate>();
-		Object.entries(wifiClientsTrafficQuery.data).forEach(([mac, data]) => {
-			const prev = prevMap.get(mac);
-			if (prev) {
-				const traffic = calcMbps(
-					[prev.time, prev.rxBytes, 0, prev.txBytes],
-					[data.time, data.rxBytes, 0, data.txBytes]
-				);
-				newRates.set(mac, { rxMbps: traffic.rxMbps, txMbps: traffic.txMbps });
-			}
-			prevMap.set(mac, data);
-		});
-		setWifiRates(newRates);
-	}, [wifiClientsTrafficQuery.data]);
+	}, [clientLatestRatesQuery.data]);
 
 	const filteredSortedDevices = useMemo(() => {
 		if (!dhcpDevicesQuery.data) return [];

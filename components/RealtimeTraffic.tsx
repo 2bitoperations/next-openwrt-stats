@@ -1,5 +1,5 @@
 'use client';
-import { RealTimeTraffic } from '@/lib/server/routerInterfaces';
+import type { LatestInterfaceRate } from '@/lib/server/metrics';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import {
@@ -61,7 +61,7 @@ export function RealtimeTraffic({ MAX_TRAFFIC }: { MAX_TRAFFIC: number }) {
 					(activeDevice.device || activeDevice.l3_device) +
 					'&displayName=' +
 					activeRouter
-			).then((res) => res.json() as Promise<RealTimeTraffic>);
+			).then((res) => res.json() as Promise<LatestInterfaceRate>);
 			if (!trafficData.success) {
 				throw new Error(trafficData.errorMessage);
 			}

@@ -1,4 +1,4 @@
-import { getRealTimeTraffic } from '@/lib/server/routerInterfaces';
+import { getLatestInterfaceRate } from '@/lib/server/metrics';
 import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export async function GET(request: Request) {
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
 				400
 			);
 		}
-		const response = await getRealTimeTraffic(device, displayName);
+		const response = await getLatestInterfaceRate(device, displayName);
 		if (!response.success) {
 			return await jsonResponse(response, 400);
 		}
