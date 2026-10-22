@@ -540,17 +540,24 @@ export async function getWifiClientsTraffic(ifnames: {
 			Object.keys(ifnames).map(async (router) => {
 				const allifname = ifnames[router];
 				perRadio[router] = {};
-				for (const ifname of allifname) {
-					const ubusResponse = await ubusBatchCall({
-						displayName: router,
-						calls: [
-							{
-								id: 1,
-								params: ['iwinfo', 'assoclist', { device: ifname.ifname }]
-							},
-							{ id: 2, params: [`hostapd.${ifname.ifname}`, 'get_clients', {}] }
-						]
-					});
+				// Fetched together (one HTTP request per router, see postUbus),
+				// processed in order below.
+				const responses = await Promise.all(
+					allifname.map((ifname) =>
+						ubusBatchCall({
+							displayName: router,
+							calls: [
+								{
+									id: 1,
+									params: ['iwinfo', 'assoclist', { device: ifname.ifname }]
+								},
+								{ id: 2, params: [`hostapd.${ifname.ifname}`, 'get_clients', {}] }
+							]
+						})
+					)
+				);
+				for (const [i, ifname] of allifname.entries()) {
+					const ubusResponse = responses[i];
 					if (!ubusResponse.success) {
 						logError({
 							displayName: router,

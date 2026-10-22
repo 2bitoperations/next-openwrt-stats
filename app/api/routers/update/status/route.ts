@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { buildResponseSchema } from '../types';
 import { logError } from '@/lib/client/errorLog';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 const statusRequestSchema = z.object({
 	requestHash: z.string().min(1, 'Request hash is required')
@@ -14,17 +15,12 @@ export async function POST(request: NextRequest) {
 		const parsedBody = statusRequestSchema.safeParse(body);
 
 		if (!parsedBody.success) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Invalid request body'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -73,51 +69,33 @@ export async function POST(request: NextRequest) {
 				zodError: parsedStatusData.error,
 				rawResponse: statusData
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to parse build status response'
-				}),
-				{
-					status: 500,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				500
 			);
 		}
 
-		return new Response(
-			JSON.stringify({
-				success: true,
-				data: parsedStatusData.data
-			}),
-			{
-				status: 200,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
+		return await jsonResponse({
+			success: true,
+			data: parsedStatusData.data
+		});
 	} catch (error: any) {
 		logError({
 			errorMessage: 'Failed to check build status',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: error.message
 					? `Failed to check build status: ${error.message}`
 					: 'Failed to check build status',
 				errorDetails: error?.cause
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

@@ -1,6 +1,6 @@
 'use client';
 import { DhcpDevices } from '@/lib/server/dhcpDevices';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader } from './ui/card';
 import {
 	ArrowDownAZ,
@@ -39,6 +39,7 @@ import { ClientProtocolHoverCard } from './ClientProtocolHoverCard';
 import { ClientSparkline } from './ClientSparkline';
 import { ClientBandwidthSummary, ClientLatestRates, ClientRecentSeries } from '@/lib/server/metrics';
 import { WifiRadio } from '@/lib/server/wifiAPs';
+import { lastTimestamp, mergeTail, sinceFor } from '@/lib/client/incremental';
 
 type WifiDataEntry = {
 	signal: number;
@@ -240,13 +241,33 @@ export default function ClientCards({
 		refetchInterval: 5000
 	});
 
+	const queryClient = useQueryClient();
 	const clientRecentSeriesQuery = useQuery({
 		queryKey: ['clientRecentSeries'],
 		queryFn: async () => {
-			const res = await fetch('/api/metrics/client-recent-series');
+			// 5-minute window (the endpoint's default), fetched incrementally.
+			const from = Math.floor(Date.now() / 1000) - 300;
+			type Series = Extract<ClientRecentSeries, { success: true }>['data'];
+			const cached = queryClient.getQueryData<Series>(['clientRecentSeries']);
+			const last = cached
+				? Object.values(cached)
+						.map((points) => lastTimestamp(points))
+						.filter((t): t is number => t !== undefined)
+						.reduce((a, b) => Math.max(a, b), -Infinity)
+				: undefined;
+			const since = sinceFor(last !== undefined && last > -Infinity ? last : undefined, from);
+			const res = await fetch(
+				'/api/metrics/client-recent-series' + (since !== undefined ? `?since=${since}` : '')
+			);
 			const data = (await res.json()) as ClientRecentSeries;
 			if (!data.success) throw new Error(data.errorMessage);
-			return data.data;
+			if (since === undefined || !cached) return data.data;
+			const merged: Series = {};
+			for (const mac of new Set([...Object.keys(cached), ...Object.keys(data.data)])) {
+				const points = mergeTail(cached[mac], data.data[mac] ?? [], since, from);
+				if (points.length) merged[mac] = points;
+			}
+			return merged;
 		},
 		refetchInterval: 5000
 	});

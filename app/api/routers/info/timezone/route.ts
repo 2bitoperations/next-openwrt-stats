@@ -2,6 +2,7 @@ import { logError } from '@/lib/client/errorLog';
 import { ubusCall } from '@/lib/server/ubusCalls';
 import { routerTimezoneSchema } from '@/types/ubusCalls';
 import { NextRequest } from 'next/server';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export type getRouterTimezone =
 	| {
@@ -16,17 +17,12 @@ export async function GET(request: NextRequest) {
 	try {
 		const displayName = request.nextUrl.searchParams.get('displayName');
 		if (!displayName) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'No router IP provided'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -41,17 +37,12 @@ export async function GET(request: NextRequest) {
 				errorMessage: 'Failed to get timezone',
 				...getTimezoneResponse
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get timezone.'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -65,51 +56,33 @@ export async function GET(request: NextRequest) {
 				zodError: parsedTimezoneResponse.error,
 				...getTimezoneResponse
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to parse router timezone.'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 		const activeTimezone = Object.keys(
 			parsedTimezoneResponse.data.result[1]
 		).find((key) => parsedTimezoneResponse.data.result[1][key].active);
 
-		return new Response(
-			JSON.stringify({
-				success: true,
-				data: activeTimezone || 'UTC'
-			}),
-			{
-				status: 200,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
+		return await jsonResponse({
+			success: true,
+			data: activeTimezone || 'UTC'
+		});
 	} catch (error) {
 		logError({
 			errorMessage: 'Failed to get router timezone.',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Failed to get router timezone'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

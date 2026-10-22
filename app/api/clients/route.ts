@@ -1,6 +1,7 @@
 import { db } from '@/lib/server/dbDriver';
 import { clientsTable } from '@/drizzle/schema/schema';
 import { desc } from 'drizzle-orm';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export type Client = {
 	id: number;
@@ -22,16 +23,8 @@ export async function GET() {
 		.from(clientsTable)
 		.orderBy(desc(clientsTable.id));
 
-	return new Response(
-		JSON.stringify({
-			success: true,
-			data: clients
-		}),
-		{
-			status: 200,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		}
-	);
+	return await jsonResponse({
+		success: true,
+		data: clients
+	});
 }

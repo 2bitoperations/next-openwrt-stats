@@ -5,6 +5,7 @@ import { ubusBatchCall, ubusCall } from '@/lib/server/ubusCalls';
 import { z } from 'zod';
 import { logError } from '@/lib/client/errorLog';
 import { packagesListSchema } from '@/types/ubusCalls';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 type PackageDiff = {
 	source: string;
@@ -47,33 +48,23 @@ export async function GET(request: NextRequest) {
 	try {
 		const displayName = request.nextUrl.searchParams.get('displayName');
 		if (!displayName) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'No router name provided'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
 		const router = await getRouter(displayName);
 		if (!router.success) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'No router found'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -100,17 +91,12 @@ export async function GET(request: NextRequest) {
 				errorMessage: 'Failed to get board info',
 				...response
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get board info'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 		const boardData = response.data.find((data) => data.id === 1);
@@ -119,17 +105,12 @@ export async function GET(request: NextRequest) {
 				displayName: router.data.displayName,
 				...boardData
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get board info'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -144,17 +125,12 @@ export async function GET(request: NextRequest) {
 				displayName: router.data.displayName,
 				...efiData
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get board info'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -163,29 +139,21 @@ export async function GET(request: NextRequest) {
 			parsedBoardData.data.release.version.includes('-rc') ||
 			parsedBoardData.data.release.version.includes('snapshot');
 		if (isSnapshot) {
-			return new Response(
-				JSON.stringify({
-					success: true,
-					data: {
-						displayName: router.data.displayName,
-						hasUpdate: false,
-						currentVersion: parsedBoardData.data.release.version,
-						latestVersion: '',
-						target: parsedBoardData.data.release.target,
-						profile: parsedBoardData.data.board_name,
-						rootfs_type: parsedBoardData.data.rootfs_type,
-						packages: [],
-						isEfi: false,
-						isSnapshot: true
-					}
-				}),
-				{
-					status: 200,
-					headers: {
-						'Content-Type': 'application/json'
-					}
+			return await jsonResponse({
+				success: true,
+				data: {
+					displayName: router.data.displayName,
+					hasUpdate: false,
+					currentVersion: parsedBoardData.data.release.version,
+					latestVersion: '',
+					target: parsedBoardData.data.release.target,
+					profile: parsedBoardData.data.board_name,
+					rootfs_type: parsedBoardData.data.rootfs_type,
+					packages: [],
+					isEfi: false,
+					isSnapshot: true
 				}
-			);
+			});
 		}
 
 		const latestVersionRequest = await fetch(
@@ -222,45 +190,32 @@ export async function GET(request: NextRequest) {
 				displayName: router.data.displayName,
 				errorMessage: 'Unable to fetch latest stable release of OpenWrt'
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Unable to fetch latest stable release of OpenWrt'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 		const latestVersion = latestVersionResponse.stable_version as string;
 		const currentVersion = parsedBoardData.data.release.version;
 		const hasUpdate = currentVersion !== latestVersion;
 		if (!hasUpdate) {
-			return new Response(
-				JSON.stringify({
-					success: true,
-					data: {
-						displayName: router.data.displayName,
-						hasUpdate: false,
-						currentVersion: currentVersion,
-						latestVersion: latestVersion,
-						target: parsedBoardData.data.release.target,
-						profile: parsedBoardData.data.board_name,
-						rootfs_type: parsedBoardData.data.rootfs_type,
-						packages: [],
-						isEfi: false
-					}
-				}),
-				{
-					status: 200,
-					headers: {
-						'Content-Type': 'application/json'
-					}
+			return await jsonResponse({
+				success: true,
+				data: {
+					displayName: router.data.displayName,
+					hasUpdate: false,
+					currentVersion: currentVersion,
+					latestVersion: latestVersion,
+					target: parsedBoardData.data.release.target,
+					profile: parsedBoardData.data.board_name,
+					rootfs_type: parsedBoardData.data.rootfs_type,
+					packages: [],
+					isEfi: false
 				}
-			);
+			});
 		}
 
 		const packagesListRequest = await ubusCall({
@@ -274,17 +229,12 @@ export async function GET(request: NextRequest) {
 				errorMessage: 'Failed to get installed packages',
 				...packagesListRequest
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get installed packages'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -298,17 +248,12 @@ export async function GET(request: NextRequest) {
 				errorMessage: 'Failed to get installed packages',
 				zodError: parsedPackagesList.error
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get installed packages'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -326,17 +271,12 @@ export async function GET(request: NextRequest) {
 				errorMessage: 'Failed to get package diff',
 				rawResponse: errorText
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get package diff'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 		const getPackagesDiffJson = await getPackagesDiffRequest.json();
@@ -368,34 +308,21 @@ export async function GET(request: NextRequest) {
 			isEfi: efiData.result[1] ? true : false
 		};
 
-		return new Response(
-			JSON.stringify({
-				success: true,
-				data: validatedData
-			}),
-			{
-				status: 200,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
+		return await jsonResponse({
+			success: true,
+			data: validatedData
+		});
 	} catch (error) {
 		logError({
 			errorMessage: 'Failed to check for updates',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Failed to check for updates'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

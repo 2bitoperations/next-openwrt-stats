@@ -1,4 +1,5 @@
 import { getClientBandwidthSummary } from '@/lib/server/metrics';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
@@ -7,33 +8,27 @@ export async function GET(request: Request) {
 			new URL(request.url).searchParams.get('windowSeconds')
 		);
 		if (!windowSeconds || windowSeconds <= 0) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Invalid or missing windowSeconds'
-				}),
-				{ status: 400, headers: { 'Content-Type': 'application/json' } }
+				},
+				400
 			);
 		}
 		const response = await getClientBandwidthSummary(windowSeconds);
 		if (!response.success) {
-			return new Response(JSON.stringify(response), {
-				status: 400,
-				headers: { 'Content-Type': 'application/json' }
-			});
+			return await jsonResponse(response, 400);
 		}
-		return new Response(JSON.stringify(response), {
-			status: 200,
-			headers: { 'Content-Type': 'application/json' }
-		});
+		return await jsonResponse(response);
 	} catch (error) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage:
 					'Something went wrong while fetching client bandwidth summary'
-			}),
-			{ status: 500, headers: { 'Content-Type': 'application/json' } }
+			},
+			500
 		);
 	}
 }

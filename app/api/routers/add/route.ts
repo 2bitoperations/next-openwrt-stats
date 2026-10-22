@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { registerRouterAction } from '@/lib/server/routersActions';
 import { logError } from '@/lib/client/errorLog';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 const addRouterRequestSchema = z.object({
 	displayName: z.string().min(1, 'Display name is required'),
@@ -22,18 +23,13 @@ export async function POST(request: NextRequest) {
 				errorMessage: 'Invalid request body',
 				zodError: parsedBody.error
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Invalid request body',
 					issues: parsedBody.error.issues
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -49,36 +45,21 @@ export async function POST(request: NextRequest) {
 		);
 
 		if (!result.success) {
-			return new Response(JSON.stringify(result), {
-				status: 400,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			});
+			return await jsonResponse(result, 400);
 		}
 
-		return new Response(JSON.stringify(result), {
-			status: 200,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		});
+		return await jsonResponse(result);
 	} catch (error) {
 		logError({
 			errorMessage: 'Failed to add router via API',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Something went wrong while adding the router'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

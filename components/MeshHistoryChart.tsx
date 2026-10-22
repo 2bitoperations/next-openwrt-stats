@@ -1,14 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { LoaderCircle } from 'lucide-react';
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from './ui/chart';
 import { RangePicker, estimateBucketSeconds, windowTicks, DEFAULT_RANGE_SECONDS } from './BandwidthHistoryChart';
 import { formatBitrate, formatBytes } from '@/lib/utils';
 import { useTimeRange } from '@/providers/timeRangeContext';
-import type { MeshHistory } from '@/lib/server/metrics';
+import type { MeshHistory, MetricHistoryPoint } from '@/lib/server/metrics';
+import { lastTimestamp, mergeTail, sinceFor } from '@/lib/client/incremental';
 
 // Combined Mesh: one stacked area per router = what that router's mesh radios
 // transmit (bytes/s). The stack height is the total airtime load on the mesh.
@@ -18,14 +19,31 @@ export function MeshHistoryChart({ rangeSeconds: controlledRange }: { rangeSecon
 	const rangeSeconds = controlledRange ?? timeRange?.rangeSeconds ?? ownRange;
 	const showOwnPicker = controlledRange === undefined && !timeRange;
 
+	const queryClient = useQueryClient();
+	const queryKey = ['meshHistory', rangeSeconds];
 	const query = useQuery({
-		queryKey: ['meshHistory', rangeSeconds],
+		queryKey,
 		queryFn: async () => {
 			const now = Math.floor(Date.now() / 1000);
-			const res = await fetch(`/api/metrics/mesh-history?from=${now - rangeSeconds}&to=${now}`);
+			const from = now - rangeSeconds;
+			type Routers = { displayName: string; points: MetricHistoryPoint[] }[];
+			const cached = queryClient.getQueryData<{ routers: Routers }>(queryKey)?.routers;
+			// One `since` for all routers: the newest point any of them has.
+			const last = cached
+				?.map((r) => lastTimestamp(r.points))
+				.filter((t): t is number => t !== undefined)
+				.reduce((a, b) => Math.max(a, b), -Infinity);
+			const since = sinceFor(last !== undefined && last > -Infinity ? last : undefined, from);
+			const res = await fetch(
+				`/api/metrics/mesh-history?from=${from}&to=${now}` + (since !== undefined ? `&since=${since}` : '')
+			);
 			const data = (await res.json()) as MeshHistory;
 			if (!data.success) throw new Error(data.errorMessage);
-			return data.data;
+			const routers: Routers = data.data.routers.map((r) => ({
+				displayName: r.displayName,
+				points: mergeTail(cached?.find((c) => c.displayName === r.displayName)?.points, r.points, since, from)
+			}));
+			return { routers };
 		},
 		refetchInterval: rangeSeconds <= 3600 ? 5000 : 60_000
 	});

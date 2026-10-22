@@ -3,6 +3,7 @@ import { wanFailoverEventTable } from '@/drizzle/schema/schema';
 import { getRouter } from '@/lib/server/router';
 import { and, asc, eq, lte } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 // Mirrors app/api/presence/[mac]/segments/route.ts's discrete-events ->
 // continuous-segments folding, minus the client/wifi joins (this is a
@@ -27,18 +28,15 @@ export async function GET(
 	const to = Number(searchParams.get('to'));
 
 	if (!displayName || !from || !to) {
-		return new Response(
-			JSON.stringify({ success: false, errorMessage: 'Missing params' }),
-			{ status: 400, headers: { 'Content-Type': 'application/json' } }
+		return await jsonResponse(
+			{ success: false, errorMessage: 'Missing params' },
+			400
 		);
 	}
 
 	const router = await getRouter(displayName);
 	if (!router.success) {
-		return new Response(JSON.stringify({ success: true, data: [] }), {
-			status: 200,
-			headers: { 'Content-Type': 'application/json' }
-		});
+		return await jsonResponse({ success: true, data: [] });
 	}
 
 	const events = await db
@@ -86,8 +84,5 @@ export async function GET(
 		});
 	}
 
-	return new Response(JSON.stringify({ success: true, data: segments }), {
-		status: 200,
-		headers: { 'Content-Type': 'application/json' }
-	});
+	return await jsonResponse({ success: true, data: segments });
 }

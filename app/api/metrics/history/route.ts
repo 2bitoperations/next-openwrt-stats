@@ -1,5 +1,6 @@
-import { queryHistory } from '@/lib/server/metrics';
+import { compactPoints, queryHistory } from '@/lib/server/metrics';
 import { getRouter } from '@/lib/server/router';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
@@ -12,6 +13,7 @@ export async function GET(request: Request) {
 		const now = Math.floor(Date.now() / 1000);
 		const from = Number(searchParams.get('from')) || now - 3600;
 		const to = Number(searchParams.get('to')) || now;
+		const since = Number(searchParams.get('since')) || undefined;
 
 		if (
 			scope !== 'interface' &&
@@ -21,35 +23,32 @@ export async function GET(request: Request) {
 			scope !== 'radio' &&
 			scope !== 'network'
 		) {
-			return new Response(
-				JSON.stringify({ success: false, errorMessage: 'Invalid scope' }),
-				{ status: 400, headers: { 'Content-Type': 'application/json' } }
+			return await jsonResponse(
+				{ success: false, errorMessage: 'Invalid scope' },
+				400
 			);
 		}
 		if (!key) {
-			return new Response(
-				JSON.stringify({ success: false, errorMessage: 'No key provided' }),
-				{ status: 400, headers: { 'Content-Type': 'application/json' } }
+			return await jsonResponse(
+				{ success: false, errorMessage: 'No key provided' },
+				400
 			);
 		}
 
 		let routerId: number | undefined = undefined;
 		if (!combined && (scope === 'interface' || scope === 'radio')) {
 			if (!displayName) {
-				return new Response(
-					JSON.stringify({
+				return await jsonResponse(
+					{
 						success: false,
 						errorMessage: `displayName is required for a non-combined ${scope} query`
-					}),
-					{ status: 400, headers: { 'Content-Type': 'application/json' } }
+					},
+					400
 				);
 			}
 			const router = await getRouter(displayName);
 			if (!router.success) {
-				return new Response(JSON.stringify(router), {
-					status: 404,
-					headers: { 'Content-Type': 'application/json' }
-				});
+				return await jsonResponse(router, 404);
 			}
 			routerId = router.data.id;
 		}
@@ -60,25 +59,23 @@ export async function GET(request: Request) {
 			routerId,
 			combined,
 			from,
-			to
+			to,
+			since
 		});
 		if (!response.success) {
-			return new Response(JSON.stringify(response), {
-				status: 400,
-				headers: { 'Content-Type': 'application/json' }
-			});
+			return await jsonResponse(response, 400);
 		}
-		return new Response(JSON.stringify(response), {
-			status: 200,
-			headers: { 'Content-Type': 'application/json' }
+		return await jsonResponse({
+			...response,
+			data: compactPoints(response.data)
 		});
 	} catch (error) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Something went wrong while fetching metric history'
-			}),
-			{ status: 500, headers: { 'Content-Type': 'application/json' } }
+			},
+			500
 		);
 	}
 }

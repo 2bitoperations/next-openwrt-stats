@@ -9,6 +9,7 @@ import { desc, eq, lt, gt, and, or, inArray } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 import { alias } from 'drizzle-orm/sqlite-core';
 import z from 'zod';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export type PresenceEvent = {
 	id: number;
@@ -48,17 +49,12 @@ export async function GET(
 	}
 	const { mac: clientMac } = await params;
 	if (!clientMac) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'No clientMac provided'
-			}),
-			{
-				status: 400,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			400
 		);
 	}
 	const { searchParams } = new URL(req.url);
@@ -75,19 +71,14 @@ export async function GET(
 		.from(clientsTable)
 		.where(eq(clientsTable.clientMacAddress, clientMac));
 	if (!clientId.length) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: true,
 				data: [],
 				hasMore: false,
 				nextCursor: null
-			}),
-			{
-				status: 404,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			404
 		);
 	}
 	const fromWifiAlias = alias(wifisTable, 'fromWifi');
@@ -163,33 +154,17 @@ export async function GET(
 			: null;
 
 	if (!data.length) {
-		return new Response(
-			JSON.stringify({
-				success: true,
-				data: [],
-				hasMore: false,
-				nextCursor: null
-			}),
-			{
-				status: 200,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
-	}
-	return new Response(
-		JSON.stringify({
+		return await jsonResponse({
 			success: true,
-			data,
-			hasMore,
-			nextCursor
-		}),
-		{
-			status: 200,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		}
-	);
+			data: [],
+			hasMore: false,
+			nextCursor: null
+		});
+	}
+	return await jsonResponse({
+		success: true,
+		data,
+		hasMore,
+		nextCursor
+	});
 }

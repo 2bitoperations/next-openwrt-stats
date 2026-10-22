@@ -1,6 +1,7 @@
 import { getRouter } from '@/lib/server/router';
 import { getCachedWanFailoverState } from '@/lib/server/metrics';
 import { NextRequest } from 'next/server';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export type GetWanFailoverState =
 	| {
@@ -21,38 +22,29 @@ export async function GET(request: NextRequest) {
 	try {
 		const displayName = request.nextUrl.searchParams.get('displayName');
 		if (!displayName) {
-			return new Response(
-				JSON.stringify({ success: false, errorMessage: 'No displayName provided' }),
-				{ status: 400, headers: { 'Content-Type': 'application/json' } }
+			return await jsonResponse(
+				{ success: false, errorMessage: 'No displayName provided' },
+				400
 			);
 		}
 		const router = await getRouter(displayName);
 		if (!router.success) {
-			return new Response(JSON.stringify(router), {
-				status: 400,
-				headers: { 'Content-Type': 'application/json' }
-			});
+			return await jsonResponse(router, 400);
 		}
 
 		const response = await getCachedWanFailoverState(router.data.id);
 		if (!response.success) {
-			return new Response(JSON.stringify(response), {
-				status: 500,
-				headers: { 'Content-Type': 'application/json' }
-			});
+			return await jsonResponse(response, 500);
 		}
 
-		return new Response(JSON.stringify(response), {
-			status: 200,
-			headers: { 'Content-Type': 'application/json' }
-		});
+		return await jsonResponse(response);
 	} catch (error) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Failed to get WAN failover state'
-			}),
-			{ status: 500, headers: { 'Content-Type': 'application/json' } }
+			},
+			500
 		);
 	}
 }

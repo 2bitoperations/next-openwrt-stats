@@ -8,6 +8,7 @@ import {
 import { and, asc, eq, lte } from 'drizzle-orm';
 import { NextRequest } from 'next/server';
 import { alias } from 'drizzle-orm/sqlite-core';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export type PresenceSegment = {
 	startTimestamp: number;
@@ -26,9 +27,9 @@ export async function GET(
 	{ params }: { params: Promise<{ mac: string }> }
 ) {
 	if (process.env.PRESENCE_ENABLED !== 'true') {
-		return new Response(
-			JSON.stringify({ success: false, errorMessage: 'Presence not enabled' }),
-			{ status: 500, headers: { 'Content-Type': 'application/json' } }
+		return await jsonResponse(
+			{ success: false, errorMessage: 'Presence not enabled' },
+			500
 		);
 	}
 	const { mac: clientMac } = await params;
@@ -37,9 +38,9 @@ export async function GET(
 	const to = Number(searchParams.get('to'));
 
 	if (!clientMac || !from || !to) {
-		return new Response(
-			JSON.stringify({ success: false, errorMessage: 'Missing params' }),
-			{ status: 400, headers: { 'Content-Type': 'application/json' } }
+		return await jsonResponse(
+			{ success: false, errorMessage: 'Missing params' },
+			400
 		);
 	}
 
@@ -49,10 +50,7 @@ export async function GET(
 		.where(eq(clientsTable.clientMacAddress, clientMac));
 
 	if (!clientId.length) {
-		return new Response(JSON.stringify({ success: true, data: [] }), {
-			status: 200,
-			headers: { 'Content-Type': 'application/json' }
-		});
+		return await jsonResponse({ success: true, data: [] });
 	}
 
 	const toWifiAlias = alias(wifisTable, 'toWifi');
@@ -110,7 +108,11 @@ export async function GET(
 		) {
 			current = null;
 		} else {
-			current = { router: event.toRouter, ssid: event.toSSID, band: event.toBand };
+			current = {
+				router: event.toRouter,
+				ssid: event.toSSID,
+				band: event.toBand
+			};
 		}
 		currentStart = eventTimeSec;
 	}
@@ -123,8 +125,5 @@ export async function GET(
 		});
 	}
 
-	return new Response(JSON.stringify({ success: true, data: segments }), {
-		status: 200,
-		headers: { 'Content-Type': 'application/json' }
-	});
+	return await jsonResponse({ success: true, data: segments });
 }

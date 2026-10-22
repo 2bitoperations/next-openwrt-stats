@@ -4,6 +4,7 @@ import { getRouter } from '@/lib/server/router';
 import { z } from 'zod';
 import { ubusCall } from '@/lib/server/ubusCalls';
 import { logError } from '@/lib/client/errorLog';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 const executeRequestSchema = z.object({
 	displayName: z.string().min(1, 'Display name is required')
@@ -33,17 +34,12 @@ export async function POST(request: NextRequest) {
 				errorMessage: 'Invalid request body',
 				zodError: parsedBody.error
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to validate sysupgrade image'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -51,17 +47,12 @@ export async function POST(request: NextRequest) {
 
 		const router = await getRouter(displayName);
 		if (!router.success) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'No router found'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -82,17 +73,12 @@ export async function POST(request: NextRequest) {
 				errorMessage: 'Failed to validate sysupgrade image',
 				...validateFirmware
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to validate sysupgrade image'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -107,17 +93,12 @@ export async function POST(request: NextRequest) {
 				zodError: validateFirmwareParsed.error,
 				...validateFirmware
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to validate sysupgrade image'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -130,17 +111,12 @@ export async function POST(request: NextRequest) {
 				errorMessage: 'Failed to validate sysupgrade image',
 				...validateFirmware
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to validate sysupgrade image'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -163,47 +139,29 @@ export async function POST(request: NextRequest) {
 				errorMessage: 'Failed to execute sysupgrade',
 				...sysupgradeUbusCall
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to execute sysupgrade'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
-		return new Response(
-			JSON.stringify({
-				success: true
-			}),
-			{
-				status: 200,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
+		return await jsonResponse({
+			success: true
+		});
 	} catch (error) {
 		logError({
 			errorMessage: 'Failed to execute sysupgrade',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Failed to execute sysupgrade'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

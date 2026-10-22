@@ -125,6 +125,20 @@ const networkDeviceStatistics = z.object({
 	tx_packets: z.number()
 });
 
+// `devstats get` (rpcd plugin from the devstats package): per device
+// [rx_bytes, tx_bytes], and every bridge's ports.
+export const devstatsSchema = z.object({
+	jsonrpc: z.string(),
+	id: z.number(),
+	result: z.tuple([
+		z.literal(0),
+		z.object({
+			dev: z.record(z.string(), z.tuple([z.number(), z.number()])),
+			bridge_members: z.array(z.string())
+		})
+	])
+});
+
 export const networkDeviceStatusSchema = z.object({
 	jsonrpc: z.string(),
 	id: z.number(),

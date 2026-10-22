@@ -14,6 +14,7 @@ import { ubusCall } from '@/lib/server/ubusCalls';
 import { wifiAPsLiveDataSchema } from '@/types/ubusCalls';
 import { logError } from '@/lib/client/errorLog';
 import { radioHtmode } from '@/lib/utils';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 export const dynamic = 'force-dynamic';
 
 type PresenceEvent = {
@@ -53,32 +54,22 @@ export async function GET() {
 	}
 	const wifiIfnames = await getIfnames();
 	if (!wifiIfnames.success) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: wifiIfnames.errorMessage
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 	const allClients = await getWifiClients(wifiIfnames.data);
 	if (!allClients.success) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Failed to get wifi clients'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 	await Promise.all(
@@ -153,17 +144,9 @@ export async function GET() {
 		.set({ data: JSON.stringify(allClients.data) })
 		.where(eq(prevClientsTable.id, 1));
 	prevClients = allClients.data;
-	return new Response(
-		JSON.stringify({
-			success: true
-		}),
-		{
-			status: 200,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		}
-	);
+	return await jsonResponse({
+		success: true
+	});
 }
 
 async function getIfnames() {

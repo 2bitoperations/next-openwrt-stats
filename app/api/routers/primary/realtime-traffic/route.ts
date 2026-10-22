@@ -1,4 +1,5 @@
 import { getRealTimeTraffic } from '@/lib/server/routerInterfaces';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export async function GET(request: Request) {
 	try {
@@ -6,46 +7,26 @@ export async function GET(request: Request) {
 		const device = searchParams.get('device');
 		const displayName = searchParams.get('displayName') || undefined;
 		if (!device) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'No device provided'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 		const response = await getRealTimeTraffic(device, displayName);
 		if (!response.success) {
-			return new Response(JSON.stringify(response), {
-				status: 400,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			});
+			return await jsonResponse(response, 400);
 		}
-		return new Response(JSON.stringify(response), {
-			status: 200,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		});
+		return await jsonResponse(response);
 	} catch (error) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Something went wrong while fetching real time traffic'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

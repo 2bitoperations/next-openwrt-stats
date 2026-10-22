@@ -10,6 +10,7 @@ import { NextRequest } from 'next/server';
 import { alias } from 'drizzle-orm/sqlite-core';
 import z from 'zod';
 import { PresenceEvent } from '../[mac]/route';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 const filterSchema = z.object({
 	eventType: z
@@ -119,33 +120,17 @@ export async function GET(req: NextRequest) {
 			: null;
 
 	if (!data.length) {
-		return new Response(
-			JSON.stringify({
-				success: true,
-				data: [],
-				hasMore: false,
-				nextCursor: null
-			}),
-			{
-				status: 200,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
-	}
-	return new Response(
-		JSON.stringify({
+		return await jsonResponse({
 			success: true,
-			data,
-			hasMore,
-			nextCursor
-		}),
-		{
-			status: 200,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		}
-	);
+			data: [],
+			hasMore: false,
+			nextCursor: null
+		});
+	}
+	return await jsonResponse({
+		success: true,
+		data,
+		hasMore,
+		nextCursor
+	});
 }

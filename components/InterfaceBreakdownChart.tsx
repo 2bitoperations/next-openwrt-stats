@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts';
 import {
 	ChartConfig,
@@ -15,9 +15,10 @@ import {
 } from './BandwidthHistoryChart';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import { formatBitrate, formatBytes } from '@/lib/utils';
-import { MetricHistory } from '@/lib/server/metrics';
+import { MetricHistory, MetricHistoryPoint } from '@/lib/server/metrics';
 import { InterfaceDevices } from '@/lib/server/metrics';
 import { LoaderCircle } from 'lucide-react';
+import { lastTimestamp, mergeTail, sinceFor } from '@/lib/client/incremental';
 
 const PALETTE = [
 	'var(--chart-1)',
@@ -79,22 +80,32 @@ export function InterfaceBreakdownChart({
 
 	const devices = devicesQuery.data || [];
 
+	const queryClient = useQueryClient();
+	const breakdownQueryKey = ['interfaceBreakdown', displayName, devices, rangeSeconds];
 	const breakdownQuery = useQuery({
-		queryKey: ['interfaceBreakdown', displayName, devices, rangeSeconds],
+		queryKey: breakdownQueryKey,
 		queryFn: async () => {
 			const now = Math.floor(Date.now() / 1000);
+			const from = now - rangeSeconds;
+			const cached = queryClient.getQueryData<
+				{ device: string; points: MetricHistoryPoint[] }[]
+			>(breakdownQueryKey);
 			const results = await Promise.all(
 				devices.map(async (device) => {
+					const cachedPoints = cached?.find((r) => r.device === device)?.points;
+					const since = sinceFor(lastTimestamp(cachedPoints), from);
 					const params = new URLSearchParams({
 						scope: 'interface',
 						key: device,
 						displayName,
-						from: String(now - rangeSeconds),
+						from: String(from),
 						to: String(now)
 					});
+					if (since !== undefined) params.set('since', String(since));
 					const res = await fetch(`/api/metrics/history?${params.toString()}`);
 					const data = (await res.json()) as MetricHistory;
-					return { device, points: data.success ? data.data : [] };
+					if (!data.success) return { device, points: cachedPoints ?? [] };
+					return { device, points: mergeTail(cachedPoints, data.data, since, from) };
 				})
 			);
 			return results;

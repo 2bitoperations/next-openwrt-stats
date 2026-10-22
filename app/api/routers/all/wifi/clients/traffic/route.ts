@@ -1,41 +1,26 @@
-import { NextResponse } from 'next/server';
 import { getWifiClientsTraffic } from '@/lib/server/wifiAPs';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export async function POST(request: Request) {
 	try {
 		const body = await request.json();
 		if (!body.ifnames) {
-			return NextResponse.json(
+			return await jsonResponse(
 				{ success: false, errorMessage: 'No ifnames provided' },
-				{ status: 400 }
+				400
 			);
 		}
 		// TODO: Validate ifnames
 		const wifiClientsTraffic = await getWifiClientsTraffic(body.ifnames);
 		if (!wifiClientsTraffic.success) {
-			return NextResponse.json(wifiClientsTraffic, {
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			});
+			return await jsonResponse(wifiClientsTraffic, 500);
 		}
-		return NextResponse.json(wifiClientsTraffic, {
-			status: 200,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		});
+		return await jsonResponse(wifiClientsTraffic);
 	} catch (error) {
 		console.error(error);
-		return NextResponse.json(
+		return await jsonResponse(
 			{ success: false, errorMessage: 'Something went wrong' },
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			500
 		);
 	}
 }

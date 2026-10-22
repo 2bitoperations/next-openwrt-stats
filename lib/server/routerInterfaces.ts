@@ -2,6 +2,7 @@ import 'server-only';
 import {
 	getNetworkInterfacesSchema,
 	getRealTimeStatsSchema,
+	devstatsSchema,
 	networkDeviceStatusSchema,
 	wireguardInterfacesSchema,
 	wireguardPeerConfigArraySchema
@@ -138,7 +139,47 @@ export async function getRealTimeTraffic(device: string, displayName?: string) {
 export type NetworkDeviceStats = Awaited<
 	ReturnType<typeof getNetworkDeviceStats>
 >;
+// Routers with the `devstats` package (openwrt-swamp repo, devstats/) answer
+// `devstats get`: the same counters and bridge ports as network.device status,
+// read from netifd on the router, in ~0.2-0.6 KB instead of 6-16 KB - this is
+// polled every second. Probed per router like macacct in hostTraffic.ts:
+// without the re-login retry (a missing object comes back as a permission
+// error, which ubusCall answers with a fresh login), cached, and re-probed
+// every REPROBE_SECONDS on routers without it. A router that had it and stops
+// answering falls back to network.device status and is probed again.
+const DEVSTATS_REPROBE_SECONDS = 300;
+const devstatsRouters = new Map<string, { has: boolean; checkedAt: number }>();
+
+async function getDevstats(displayName: string) {
+	const nowSec = Date.now() / 1000;
+	const known = devstatsRouters.get(displayName);
+	if (known && !known.has && nowSec - known.checkedAt < DEVSTATS_REPROBE_SECONDS) {
+		return null;
+	}
+	const response = await ubusCall({
+		displayName,
+		params: ['devstats', 'get', {}],
+		attemptRetry: known?.has === true
+	});
+	const parsed = response.success ? devstatsSchema.safeParse(response.data) : null;
+	if (!parsed?.success) {
+		if (known?.has) devstatsRouters.delete(displayName);
+		else devstatsRouters.set(displayName, { has: false, checkedAt: nowSec });
+		return null;
+	}
+	devstatsRouters.set(displayName, { has: true, checkedAt: nowSec });
+	const { dev, bridge_members } = parsed.data.result[1];
+	const stats: { [device: string]: { rxBytes: number; txBytes: number } } = {};
+	for (const [device, [rxBytes, txBytes]] of Object.entries(dev)) {
+		stats[device] = { rxBytes, txBytes };
+	}
+	return { stats, bridgeMembers: bridge_members };
+}
+
 export async function getNetworkDeviceStats(displayName: string) {
+	const slim = await getDevstats(displayName);
+	if (slim) return { success: true, data: slim } as const;
+
 	const ubusResponse = await ubusCall({
 		displayName,
 		params: ['network.device', 'status', {}]

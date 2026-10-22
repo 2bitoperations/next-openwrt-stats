@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { buildResponseSchema } from '../types';
 import { logError } from '@/lib/client/errorLog';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 const buildRequestSchema = z.object({
 	displayName: z.string().min(1, 'Display name is required'),
@@ -29,17 +30,12 @@ export async function POST(request: NextRequest) {
 		const parsedBody = buildRequestSchema.safeParse(body);
 
 		if (!parsedBody.success) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Invalid request body'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -105,51 +101,33 @@ export async function POST(request: NextRequest) {
 				zodError: parsedBuildData.error,
 				rawResponse: buildData
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to parse build response'
-				}),
-				{
-					status: 500,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				500
 			);
 		}
 
-		return new Response(
-			JSON.stringify({
-				success: true,
-				data: parsedBuildData.data
-			}),
-			{
-				status: 200,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
+		return await jsonResponse({
+			success: true,
+			data: parsedBuildData.data
+		});
 	} catch (error: any) {
 		logError({
 			errorMessage: 'Failed to build sysupgrade',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: error?.message
 					? `Failed to build sysupgrade: ${error.message}`
 					: 'Failed to build sysupgrade',
 				errorDetails: error?.cause
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

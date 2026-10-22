@@ -9,6 +9,7 @@ import {
 	wifiConfigParent
 } from '@/types/ubusCalls';
 import { NextRequest } from 'next/server';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export type WifiAPEditForm = {
 	wifiAPFrequencyList: {
@@ -164,20 +165,13 @@ export async function GET(reuqest: NextRequest) {
 			wifiAPConfigResponse.result?.[1].values
 		);
 
-		return new Response(
-			JSON.stringify({
-				wifiAPFrequencyList: wifiAPFrequencyList.result[1].results,
-				wifiAPTxPowerList: wifiAPTxPowerList.result[1].results,
-				wifiAPCountryList: wifiAPCountryList.result[1].results,
-				wifiAPParentConfig: wifiAPParentConfig,
-				wifiAPConfig: wifiAPConfig
-			}),
-			{
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
-		);
+		return await jsonResponse({
+			wifiAPFrequencyList: wifiAPFrequencyList.result[1].results,
+			wifiAPTxPowerList: wifiAPTxPowerList.result[1].results,
+			wifiAPCountryList: wifiAPCountryList.result[1].results,
+			wifiAPParentConfig: wifiAPParentConfig,
+			wifiAPConfig: wifiAPConfig
+		});
 	} catch (error) {
 		logError({
 			errorMessage: 'Something went wrong while getting the wifi AP info',

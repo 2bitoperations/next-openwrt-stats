@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
 import {
 	ChartConfig,
@@ -9,9 +9,10 @@ import {
 	ChartTooltipContent
 } from './ui/chart';
 import { formatBitrate, formatBytes } from '@/lib/utils';
-import { MetricHistory } from '@/lib/server/metrics';
+import { MetricHistory, MetricHistoryPoint } from '@/lib/server/metrics';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import { LoaderCircle } from 'lucide-react';
+import { lastTimestamp, mergeTail, sinceFor } from '@/lib/client/incremental';
 
 // Evenly spaced ticks across the whole window (recharts would otherwise place
 // them only where there is data).
@@ -100,23 +101,29 @@ export function useMetricHistory({
 	combined?: boolean;
 	rangeSeconds: number;
 }) {
+	const queryClient = useQueryClient();
+	const queryKey = [
+		'metricHistory',
+		scope,
+		metricKey,
+		displayName,
+		combined,
+		rangeSeconds
+	];
 	return useQuery({
-		queryKey: [
-			'metricHistory',
-			scope,
-			metricKey,
-			displayName,
-			combined,
-			rangeSeconds
-		],
+		queryKey,
 		queryFn: async () => {
 			const now = Math.floor(Date.now() / 1000);
+			const from = now - rangeSeconds;
+			const cached = queryClient.getQueryData<MetricHistoryPoint[]>(queryKey);
+			const since = sinceFor(lastTimestamp(cached), from);
 			const params = new URLSearchParams({
 				scope,
 				key: metricKey,
-				from: String(now - rangeSeconds),
+				from: String(from),
 				to: String(now)
 			});
+			if (since !== undefined) params.set('since', String(since));
 			if (displayName) params.set('displayName', displayName);
 			if (combined) params.set('combined', 'true');
 			const res = await fetch(`/api/metrics/history?${params.toString()}`);
@@ -124,7 +131,7 @@ export function useMetricHistory({
 			if (!data.success) {
 				throw new Error(data.errorMessage);
 			}
-			return data.data;
+			return mergeTail(cached, data.data, since, from);
 		},
 		refetchInterval: rangeSeconds <= 3600 ? 5000 : 60_000
 	});

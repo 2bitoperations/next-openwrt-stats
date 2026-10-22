@@ -436,13 +436,82 @@ async function routerFetch(routerIP: string, body: string): Promise<Response> {
 	}
 }
 
+// ---- Calls to one router issued together share one HTTP request ----
+// Every call used to be its own POST /ubus. Calls (and batches) queued for the
+// same router within BATCH_WINDOW_MS go out as one JSON-RPC batch - the
+// collector issues a tick's calls for each router concurrently, so per tick a
+// router gets one request instead of one per call (devstats every 1 s; plus
+// iwinfo/hostapd per radio and macacct every 5 s). uhttpd runs the calls in
+// order and answers with an array; ids are renumbered for the trip and each
+// caller gets its own responses back with its own ids.
+const BATCH_WINDOW_MS = 5;
+type QueuedCalls = {
+	calls: { id?: unknown }[];
+	resolve: (responses: unknown[]) => void;
+	reject: (error: unknown) => void;
+};
+const queuedCalls = new Map<string, QueuedCalls[]>();
+
+function postUbus(routerIP: string, calls: { id?: unknown }[]): Promise<unknown[]> {
+	return new Promise((resolve, reject) => {
+		let queue = queuedCalls.get(routerIP);
+		if (!queue) {
+			queue = [];
+			queuedCalls.set(routerIP, queue);
+			setTimeout(() => flushUbus(routerIP), BATCH_WINDOW_MS);
+		}
+		queue.push({ calls, resolve, reject });
+	});
+}
+
+async function flushUbus(routerIP: string) {
+	const queue = queuedCalls.get(routerIP) ?? [];
+	queuedCalls.delete(routerIP);
+	const all = queue.flatMap((q) => q.calls);
+	try {
+		// A lone call goes out as a plain (non-batch) request, as before.
+		const single = all.length === 1;
+		const response = await routerFetch(
+			routerIP,
+			JSON.stringify(single ? all[0] : all.map((call, i) => ({ ...call, id: i })))
+		);
+		const json = await response.json();
+		if (single) {
+			queue[0].resolve([json]);
+			return;
+		}
+		// Not an array: the whole batch was refused (e.g. a JSON-RPC error
+		// object) - every call gets that answer, with its own id.
+		const byId = new Map<unknown, unknown>(
+			Array.isArray(json) ? json.map((r) => [r?.id, r]) : []
+		);
+		let i = 0;
+		for (const q of queue) {
+			q.resolve(
+				q.calls.map((call) => {
+					const r = Array.isArray(json) ? byId.get(i) : json;
+					i++;
+					return r && typeof r === 'object'
+						? { ...r, id: call.id }
+						: {
+								jsonrpc: '2.0',
+								id: call.id,
+								error: { code: -32603, message: 'No response in batch' }
+							};
+				})
+			);
+		}
+	} catch (error) {
+		for (const q of queue) q.reject(error);
+	}
+}
+
 async function sendUbus(
 	routerIP: string,
 	ubusObject: object
 ): SendUbusReturnType {
 	try {
-		const response = await routerFetch(routerIP, JSON.stringify(ubusObject));
-		const jsonResponse = await response.json();
+		const [jsonResponse] = (await postUbus(routerIP, [ubusObject])) as any[];
 		const parsedResponse = validResponseSchema.safeParse(jsonResponse);
 		if (!parsedResponse.success) {
 			const accessDeniedCheck = accessDeniedSchema.safeParse(jsonResponse);
@@ -518,8 +587,7 @@ async function sendUbusBatch(
 	calls: object[]
 ): SendUbusBatchReturnType {
 	try {
-		const response = await routerFetch(routerIP, JSON.stringify(calls));
-		const jsonResponse = await response.json();
+		const jsonResponse = (await postUbus(routerIP, calls)) as any[];
 		const parsedResponse = batchResponseSchema.safeParse(jsonResponse);
 		if (!parsedResponse.success) {
 			return {

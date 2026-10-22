@@ -1,26 +1,21 @@
 import { getClientLatestRates } from '@/lib/server/metrics';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
 	try {
 		const response = await getClientLatestRates();
 		if (!response.success) {
-			return new Response(JSON.stringify(response), {
-				status: 400,
-				headers: { 'Content-Type': 'application/json' }
-			});
+			return await jsonResponse(response, 400);
 		}
-		return new Response(JSON.stringify(response), {
-			status: 200,
-			headers: { 'Content-Type': 'application/json' }
-		});
+		return await jsonResponse(response);
 	} catch (error) {
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Something went wrong while fetching client latest rates'
-			}),
-			{ status: 500, headers: { 'Content-Type': 'application/json' } }
+			},
+			500
 		);
 	}
 }

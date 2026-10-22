@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { getRouter } from '@/lib/server/router';
 import { logError } from '@/lib/client/errorLog';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 const backupRequestSchema = z.object({
 	displayName: z.string().min(1, 'Display name is required')
@@ -14,17 +15,12 @@ export async function POST(request: NextRequest) {
 		const parsedBody = backupRequestSchema.safeParse(body);
 
 		if (!parsedBody.success) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Invalid request body'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -32,17 +28,12 @@ export async function POST(request: NextRequest) {
 
 		const router = await getRouter(displayName);
 		if (!router.success) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'No router found'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -92,19 +83,14 @@ export async function POST(request: NextRequest) {
 			errorMessage: 'Failed to get backup',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: error?.message
 					? `Failed to get backup: ${error.message}`
 					: 'Failed to get backup'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

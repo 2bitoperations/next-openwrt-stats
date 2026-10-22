@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { ubusBatchCall } from '@/lib/server/ubusCalls';
 import { NextRequest } from 'next/server';
 import { logError } from '@/lib/client/errorLog';
+import { jsonResponse } from '@/lib/server/jsonResponse';
 
 export type RouterLogs = Awaited<
 	| {
@@ -34,17 +35,12 @@ export async function GET(request: NextRequest) {
 	try {
 		const displayName = request.nextUrl.searchParams.get('displayName');
 		if (!displayName) {
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'No router name provided'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 		const router = await db
@@ -60,17 +56,12 @@ export async function GET(request: NextRequest) {
 				displayName,
 				errorMessage: 'This router does not exist.'
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'This router does not exist.'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 
@@ -100,17 +91,12 @@ export async function GET(request: NextRequest) {
 				errorMessage: 'Failed to get logs',
 				...logsCall
 			});
-			return new Response(
-				JSON.stringify({
+			return await jsonResponse(
+				{
 					success: false,
 					errorMessage: 'Failed to get logs.'
-				}),
-				{
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json'
-					}
-				}
+				},
+				400
 			);
 		}
 		const oldLogCall = logsCall.data.find((call) => call.id === 1);
@@ -119,70 +105,44 @@ export async function GET(request: NextRequest) {
 			const logs = (oldLogCall.result[1].stdout as string)
 				.trimEnd()
 				.split('\n');
-			return new Response(
-				JSON.stringify({
-					success: true,
-					data: {
-						logs,
-						version: 1
-					}
-				}),
-				{
-					status: 200,
-					headers: {
-						'Content-Type': 'application/json'
-					}
+			return await jsonResponse({
+				success: true,
+				data: {
+					logs,
+					version: 1
 				}
-			);
+			});
 		}
 
 		if (newLogCall?.success && newLogCall.result?.[1]?.log) {
 			const logs = newLogCall.result[1].log;
-			return new Response(
-				JSON.stringify({
-					success: true,
-					data: {
-						logs,
-						version: 2
-					}
-				}),
-				{
-					status: 200,
-					headers: {
-						'Content-Type': 'application/json'
-					}
+			return await jsonResponse({
+				success: true,
+				data: {
+					logs,
+					version: 2
 				}
-			);
+			});
 		}
 
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Failed to get logs.'
-			}),
-			{
-				status: 400,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			400
 		);
 	} catch (error) {
 		logError({
 			errorMessage: 'Something went wrong while getting the router logs',
 			error
 		});
-		return new Response(
-			JSON.stringify({
+		return await jsonResponse(
+			{
 				success: false,
 				errorMessage: 'Failed to get router logs.'
-			}),
-			{
-				status: 500,
-				headers: {
-					'Content-Type': 'application/json'
-				}
-			}
+			},
+			500
 		);
 	}
 }

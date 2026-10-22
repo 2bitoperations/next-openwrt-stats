@@ -243,6 +243,10 @@ async function computeClientAndRadioSampleRows(
 	let stations: { [mac: string]: { [apId: string]: { rxBytes: number; txBytes: number } } } =
 		{};
 
+	// Started now so its macacct calls share each router's request with the
+	// wifi calls below.
+	const hostsPromise = getHostTrafficTotals();
+
 	if (Object.keys(cachedIfnames).length > 0) {
 		const routerIdByName = new Map(routers.map((r) => [r.displayName, r.id]));
 		const traffic = await getWifiClientsTraffic(cachedIfnames);
@@ -284,7 +288,7 @@ async function computeClientAndRadioSampleRows(
 	//   wifi    - hostapd station counters (wifi only; reset on reassociation)
 	//   nlbw    - nlbwmon (routed local<->non-local flows only)
 	// Signal strength still comes from wifi data whichever basis is used.
-	const hosts = await getHostTrafficTotals();
+	const hosts = await hostsPromise;
 	const hostRouters = hosts.success ? hosts.data : [];
 	// Per MAC, one reading per router that reports it, grouped by source.
 	type HostReading = CounterReading & {
@@ -593,38 +597,32 @@ export async function collectTick() {
 		}
 
 		// Fetch phase - all ubus calls happen here, outside any transaction.
-		const interfaceRows = await computeInterfaceSampleRows(
-			routers.data,
-			nowSec
-		);
-
-		let radioSnapshot: Awaited<ReturnType<typeof fetchWifiRadioSnapshot>> =
-			null;
-		let dhcpLeases: Awaited<ReturnType<typeof getDhcpDevices>> | null = null;
-		if (tickCount % RADIO_CONFIG_EVERY_N_TICKS === 0) {
-			radioSnapshot = await fetchWifiRadioSnapshot(routers.data);
-			dhcpLeases = await getDhcpDevices();
-		}
-
-		let routerSnapshotRows: Awaited<ReturnType<typeof fetchRouterSnapshotRows>> =
-			[];
-		if (tickCount % ROUTER_INFO_EVERY_N_TICKS === 0) {
-			routerSnapshotRows = await fetchRouterSnapshotRows(routers.data);
-		}
-
-		let wanFailoverRows: Awaited<ReturnType<typeof fetchWanFailoverStateRows>> =
-			[];
-		if (tickCount % WAN_FAILOVER_EVERY_N_TICKS === 0) {
-			wanFailoverRows = await fetchWanFailoverStateRows(routers.data);
-		}
-
-		let clientRadioRows: SampleRows = { rows: [], updates: [] };
-		if (tickCount % CLIENT_POLL_EVERY_N_TICKS === 0) {
-			clientRadioRows = await computeClientAndRadioSampleRows(
-				routers.data,
-				nowSec
-			);
-		}
+		// Concurrently, so that each router's calls for this tick are
+		// coalesced into one HTTP request (see postUbus in ubusCalls.ts).
+		const radioTick = tickCount % RADIO_CONFIG_EVERY_N_TICKS === 0;
+		const [
+			interfaceRows,
+			[radioSnapshot, dhcpLeases],
+			routerSnapshotRows,
+			wanFailoverRows,
+			clientRadioRows
+		] = await Promise.all([
+			computeInterfaceSampleRows(routers.data, nowSec),
+			radioTick
+				? fetchWifiRadioSnapshot(routers.data).then(
+						async (snapshot) => [snapshot, await getDhcpDevices()] as const
+					)
+				: ([null, null] as const),
+			tickCount % ROUTER_INFO_EVERY_N_TICKS === 0
+				? fetchRouterSnapshotRows(routers.data)
+				: [],
+			tickCount % WAN_FAILOVER_EVERY_N_TICKS === 0
+				? fetchWanFailoverStateRows(routers.data)
+				: [],
+			tickCount % CLIENT_POLL_EVERY_N_TICKS === 0
+				? computeClientAndRadioSampleRows(routers.data, nowSec)
+				: ({ rows: [], updates: [] } as SampleRows)
+		]);
 
 		// Write phase - everything below is pure DB work, batched into one
 		// transaction so it fsyncs once instead of once per statement.
@@ -841,14 +839,38 @@ export type MetricHistoryPoint = {
 	noiseAvg?: number | null;
 };
 
+// Chart points as sent to the browser: rates rounded to whole bytes/s and
+// gauges that are null (every non-radio series) left out - about a third of
+// the JSON otherwise.
+export function compactPoints(points: MetricHistoryPoint[]): MetricHistoryPoint[] {
+	return points.map((p) => {
+		const out: MetricHistoryPoint = {
+			timestamp: p.timestamp,
+			rxAvg: Math.round(p.rxAvg),
+			rxMax: Math.round(p.rxMax),
+			txAvg: Math.round(p.txAvg),
+			txMax: Math.round(p.txMax)
+		};
+		for (const k of ['signalAvg', 'signalMin', 'clientCountAvg', 'clientCountMax', 'noiseAvg'] as const) {
+			const v = p[k];
+			if (v !== null && v !== undefined) out[k] = Math.round(v * 10) / 10;
+		}
+		return out;
+	});
+}
+
 export type MetricHistory = Awaited<ReturnType<typeof queryHistory>>;
+// `since` (optional): the caller already has the points up to it, so return
+// only those after it (rollup tiers: from it on). The tier is still picked from the whole
+// from..to range, so an incremental poll gets the same points a full one would.
 export async function queryHistory({
 	scope,
 	key,
 	routerId,
 	combined,
 	from,
-	to
+	to,
+	since
 }: {
 	scope: MetricScopeName;
 	key: string;
@@ -856,8 +878,15 @@ export async function queryHistory({
 	combined?: boolean;
 	from: number;
 	to: number;
+	since?: number;
 }) {
 	const tier = pickTier(to - from);
+	// Raw buckets are stamped with their end and only whole ones inside the
+	// range are returned, so a `since` on a bucket boundary gets exactly the
+	// buckets after it.
+	if (since !== undefined && since > from) {
+		from = Math.floor(since / RAW_CHART_STEP_SECONDS) * RAW_CHART_STEP_SECONDS;
+	}
 
 	try {
 		if (tier === 'raw') return await queryRawHistory({ scope, key, routerId, combined, from, to });
@@ -1049,7 +1078,15 @@ export type CachedDhcpLeases = Awaited<ReturnType<typeof getCachedDhcpLeases>>;
 // mesh mode, per the cached radio snapshot - not bat0) TRANSMIT. Summed over
 // routers, every over-the-air transmission is counted once per hop - the airtime
 // load on the shared mesh channel.
-export async function queryMeshHistory({ from, to }: { from: number; to: number }) {
+export async function queryMeshHistory({
+	from,
+	to,
+	since
+}: {
+	from: number;
+	to: number;
+	since?: number;
+}) {
 	const radios = await getCachedWifiRadios();
 	if (!radios.success) return { success: false, errorMessage: 'Failed to get radios' } as const;
 	const routers = await getRoutersWithId();
@@ -1068,7 +1105,14 @@ export async function queryMeshHistory({ from, to }: { from: number; to: number 
 
 		const byTimestamp = new Map<number, { txAvg: number; txMax: number }>();
 		for (const ifname of meshIfnames) {
-			const history = await queryHistory({ scope: 'interface', key: ifname, routerId: router.id, from, to });
+			const history = await queryHistory({
+				scope: 'interface',
+				key: ifname,
+				routerId: router.id,
+				from,
+				to,
+				since
+			});
 			if (!history.success) continue;
 			for (const p of history.data) {
 				const acc = byTimestamp.get(p.timestamp) ?? { txAvg: 0, txMax: 0 };
@@ -1217,9 +1261,10 @@ export async function getClientBandwidthSummary(windowSeconds: number) {
 	}
 }
 
-export async function getClientRecentSeries(windowSeconds: number) {
+// `since` (optional): only rows from then on, for a caller that keeps the rest.
+export async function getClientRecentSeries(windowSeconds: number, since?: number) {
 	const now = Math.floor(Date.now() / 1000);
-	const from = now - windowSeconds;
+	const from = since !== undefined ? Math.max(now - windowSeconds, since) : now - windowSeconds;
 
 	try {
 		const rows = await db
@@ -1252,8 +1297,8 @@ export async function getClientRecentSeries(windowSeconds: number) {
 			}
 			data[row.mac].push({
 				timestamp: row.timestamp,
-				rxAvg: Number(row.rxAvg) || 0,
-				txAvg: Number(row.txAvg) || 0
+				rxAvg: Math.round(Number(row.rxAvg) || 0),
+				txAvg: Math.round(Number(row.txAvg) || 0)
 			});
 		}
 
