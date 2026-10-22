@@ -11,7 +11,7 @@ import {
 	UserIcon,
 	WifiIcon
 } from 'lucide-react';
-import { WifiClients } from '@/lib/server/wifiAPs';
+import type { LatestWifiClientsResponse } from '@/app/api/wifi/clients-latest/route';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import {
 	cn,
@@ -44,8 +44,8 @@ type WifiDataEntry = {
 	signal: number;
 	noise?: number;
 	connected_time?: number;
-	rx: { packets: number; bytes: number };
-	tx: { packets: number; bytes: number };
+	rx: { bytes: number };
+	tx: { bytes: number };
 	displayName: string;
 	ssid: string;
 	band: string;
@@ -110,7 +110,9 @@ export default function ClientCards({
 
 			return dhcpDevices.data;
 		},
-		refetchInterval: false,
+		// The collector refreshes its lease snapshot every ~10 s; polling it is
+		// how a newly connected client gets a card without a reload.
+		refetchInterval: 10_000,
 		retry: 1
 	});
 
@@ -170,23 +172,21 @@ export default function ClientCards({
 		return map;
 	}, [wifiAPsIfname]);
 
+	// The collector's latest station list (refreshed each ~5 s client poll), so
+	// new and roaming clients update without a live call to every AP.
 	const wifiClientsQuery = useQuery({
 		queryKey: ['wifiClients'],
 		queryFn: async () => {
-			const wifiClients = await fetch('/api/routers/all/wifi/clients', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({ ifnames: wifiAPsIfname })
-			}).then((res) => res.json() as Promise<WifiClients>);
+			const wifiClients = await fetch('/api/wifi/clients-latest').then(
+				(res) => res.json() as Promise<LatestWifiClientsResponse>
+			);
 			if (!wifiClients.success) {
 				throw new Error(wifiClients.errorMessage);
 			}
 
 			return wifiClients.data;
 		},
-		enabled: Object.keys(wifiAPsIfname).length > 0
+		refetchInterval: 5000
 	});
 
 	const bandwidthWindowSeconds = BANDWIDTH_WINDOW_SECONDS[sortKey];

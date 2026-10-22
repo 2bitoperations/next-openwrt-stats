@@ -635,6 +635,22 @@ export async function getWifiClientsTraffic(ifnames: {
 				time: number;
 			};
 		} = {};
+		// Each station's strongest AP, for the client cards (served from the
+		// collector's snapshot, see getLatestWifiClients). Counters are the AP's
+		// side here, as getWifiClients reports them.
+		const clients: {
+			[mac: string]: {
+				displayName: string;
+				ifname: string;
+				signal: number;
+				noise?: number;
+				rx: { bytes: number };
+				tx: { bytes: number };
+			};
+		} = {};
+		// Routers whose stations were read this tick (a failed poll is not
+		// "every client left").
+		const responded: string[] = [];
 		// Every AP's own counters per station (client's side, like trafficStats),
 		// keyed `router|ifname`: the collector diffs each one separately, since
 		// a roaming station is listed at two APs with unrelated counters.
@@ -665,9 +681,9 @@ export async function getWifiClientsTraffic(ifnames: {
 				const allifname = ifnames[router];
 				perRadio[router] = {};
 				const names = allifname.map((ifname) => ifname.ifname);
-				const radios =
-					(await fetchRadioClientsDevstats(router, names)) ??
-					(await fetchRadioClientsFull(router, names));
+				const devstats = await fetchRadioClientsDevstats(router, names);
+				const radios = devstats ?? (await fetchRadioClientsFull(router, names));
+				if (devstats || radios.some((radio) => radio !== null)) responded.push(router);
 				for (const [i, ifname] of allifname.entries()) {
 					const radio = radios[i];
 					if (!radio) continue;
@@ -704,6 +720,14 @@ export async function getWifiClientsTraffic(ifnames: {
 								txBytes: client.rx.bytes,
 								signal: client.signal,
 								time: Date.now() / 1000
+							};
+							clients[client.mac.toUpperCase()] = {
+								displayName: router,
+								ifname: ifname.ifname,
+								signal: client.signal,
+								noise: client.noise,
+								rx: { bytes: client.rx.bytes },
+								tx: { bytes: client.tx.bytes }
 							};
 						}
 					}
@@ -746,6 +770,13 @@ export async function getWifiClientsTraffic(ifnames: {
 								signal: client.signal || -200,
 								time: Date.now() / 1000
 							};
+							clients[key.toUpperCase()] = {
+								displayName: router,
+								ifname: ifname.ifname,
+								signal: client.signal || 0,
+								rx: { bytes: client.bytes.rx },
+								tx: { bytes: client.bytes.tx }
+							};
 						}
 					}
 				}
@@ -756,7 +787,9 @@ export async function getWifiClientsTraffic(ifnames: {
 			success: true,
 			data: trafficStats,
 			stations,
-			perRadio
+			perRadio,
+			clients,
+			responded
 		} as const;
 	} catch (error) {
 		console.error(error);

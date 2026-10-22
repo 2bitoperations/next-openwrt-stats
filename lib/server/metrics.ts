@@ -13,7 +13,7 @@ import {
 import { and, avg, eq, gte, inArray, lte, max, min, sql } from 'drizzle-orm';
 import { getRoutersWithId } from './router';
 import { getNetworkDeviceStats } from './routerInterfaces';
-import { getWifiClientsTraffic, getWifiRadios } from './wifiAPs';
+import { getWifiClientsTraffic, getWifiRadios, type WifiClientsTraffic } from './wifiAPs';
 import { getHostTrafficTotals } from './hostTraffic';
 import {
 	ClientCounterTracker,
@@ -65,8 +65,43 @@ const rateRows = new SeriesRowBuilder();
 const seriesIdCache = new Map<string, number>();
 
 type WifiIfnames = {
-	[displayName: string]: { ifname: string; ssid: string; band: string }[];
+	[displayName: string]: {
+		ifname: string;
+		ssid: string;
+		band: string;
+		htmode: string;
+		channel: number;
+	}[];
 };
+
+// The collector's latest wifi client list (every station's strongest AP), for
+// the client cards: refreshed by each client poll, so new and roaming clients
+// show up without the UI calling the APs itself. On globalThis because Next
+// bundles each route separately - module state here is not shared with the
+// route that serves it.
+export type LatestWifiClients = {
+	[mac: string]: {
+		displayName: string;
+		ssid: string;
+		band: string;
+		htmode: string;
+		channel: number;
+		signal: number;
+		noise?: number;
+		// Seconds since the collector first saw the station on this AP;
+		// unknown for one already associated when the collector started.
+		connected_time?: number;
+		rx: { bytes: number };
+		tx: { bytes: number };
+	};
+};
+const latestWifi = globalThis as unknown as {
+	latestWifiClients?: { updatedAt: number; data: LatestWifiClients };
+};
+// `mac|router|ifname` -> first seen (s), null if already there on the
+// router's first poll.
+const stationFirstSeen = new Map<string, number | null>();
+const stationPolledRouters = new Set<string>();
 
 let tickCount = 0;
 let isCollecting = false;
@@ -233,6 +268,63 @@ async function computeInterfaceSampleRows(
 	return out;
 }
 
+function updateLatestWifiClients(
+	clients: Extract<WifiClientsTraffic, { success: true }>['clients'],
+	responded: string[],
+	nowSec: number
+) {
+	const respondedSet = new Set(responded);
+	const previous = latestWifi.latestWifiClients?.data ?? {};
+	const data: LatestWifiClients = {};
+	// A router that didn't answer this tick keeps its last-known clients.
+	for (const [mac, client] of Object.entries(previous)) {
+		if (!respondedSet.has(client.displayName)) data[mac] = client;
+	}
+	const seenNow = new Set<string>();
+	for (const [mac, client] of Object.entries(clients)) {
+		const radio = cachedIfnames[client.displayName]?.find(
+			(r) => r.ifname === client.ifname
+		);
+		if (!radio) continue;
+		const key = `${mac}|${client.displayName}|${client.ifname}`;
+		seenNow.add(key);
+		if (!stationFirstSeen.has(key)) {
+			stationFirstSeen.set(
+				key,
+				stationPolledRouters.has(client.displayName) ? nowSec : null
+			);
+		}
+		const firstSeen = stationFirstSeen.get(key);
+		data[mac] = {
+			displayName: client.displayName,
+			ssid: radio.ssid,
+			band: radio.band,
+			htmode: radio.htmode,
+			channel: radio.channel,
+			signal: client.signal,
+			noise: client.noise,
+			connected_time:
+				firstSeen !== null && firstSeen !== undefined ? nowSec - firstSeen : undefined,
+			rx: client.rx,
+			tx: client.tx
+		};
+	}
+	for (const key of stationFirstSeen.keys()) {
+		const router = key.split('|')[1];
+		if (respondedSet.has(router) && !seenNow.has(key)) stationFirstSeen.delete(key);
+	}
+	for (const router of responded) stationPolledRouters.add(router);
+	latestWifi.latestWifiClients = { updatedAt: nowSec, data };
+}
+
+export function getLatestWifiClients() {
+	const latest = latestWifi.latestWifiClients;
+	if (!latest) {
+		return { success: false, errorMessage: 'No wifi client poll yet' } as const;
+	}
+	return { success: true, updatedAt: latest.updatedAt, data: latest.data } as const;
+}
+
 async function computeClientAndRadioSampleRows(
 	routers: RouterRow[],
 	nowSec: number
@@ -254,6 +346,7 @@ async function computeClientAndRadioSampleRows(
 		if (traffic.success) {
 			wifi = traffic.data;
 			stations = traffic.stations;
+			updateLatestWifiClients(traffic.clients, traffic.responded, nowSec);
 
 			for (const [displayName, radios] of Object.entries(traffic.perRadio)) {
 				const routerId = routerIdByName.get(displayName);
@@ -405,7 +498,9 @@ async function fetchWifiRadioSnapshot(routers: RouterRow[]) {
 		ifnames[radio.displayName].push({
 			ifname: radio.ifname,
 			ssid: radio.ssid,
-			band: radio.band
+			band: radio.band,
+			htmode: radio.htmode,
+			channel: radio.channel
 		});
 	}
 
