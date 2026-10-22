@@ -1,7 +1,8 @@
 import 'server-only';
 import { getRouters } from './router';
-import { ubusBatchCall } from './ubusCalls';
+import { ubusBatchCall, ubusCall } from './ubusCalls';
 import {
+	devstatsWifiSchema,
 	wifiAPsLiveDataSchema,
 	wifiClientsSchema,
 	wifiConfigSchema,
@@ -495,6 +496,129 @@ export async function getWifiClients(ifnames: {
 export type WifiClientsTraffic = Awaited<
 	ReturnType<typeof getWifiClientsTraffic>
 >;
+// One radio's clients, from either source below: the iwinfo assoclist fields
+// and the hostapd get_clients fields that getWifiClientsTraffic reads.
+type IwinfoStation = {
+	mac: string;
+	signal: number;
+	noise: number;
+	rx: { bytes: number };
+	tx: { bytes: number };
+};
+type HostapdClients = {
+	[mac: string]: { signal?: number; bytes?: { rx: number; tx: number } };
+};
+type RadioClients = { iwinfo: IwinfoStation[] | null; hostapd: HostapdClients | null };
+
+// Routers with devstats >= 2 (openwrt-swamp repo, devstats/) answer
+// `devstats wifi`: every radio's stations, noise and hostapd clients in one
+// call, ~10x smaller than iwinfo assoclist + hostapd get_clients per radio.
+// Probed per router like `devstats get` (routerInterfaces.ts).
+const DEVSTATS_WIFI_REPROBE_SECONDS = 300;
+const devstatsWifiRouters = new Map<string, { has: boolean; checkedAt: number }>();
+
+async function fetchRadioClientsDevstats(
+	router: string,
+	ifnames: string[]
+): Promise<(RadioClients | null)[] | null> {
+	const nowSec = Date.now() / 1000;
+	const known = devstatsWifiRouters.get(router);
+	if (known && !known.has && nowSec - known.checkedAt < DEVSTATS_WIFI_REPROBE_SECONDS) {
+		return null;
+	}
+	const response = await ubusCall({
+		displayName: router,
+		params: ['devstats', 'wifi', { devices: ifnames }],
+		attemptRetry: known?.has === true
+	});
+	const parsed = response.success ? devstatsWifiSchema.safeParse(response.data) : null;
+	if (!parsed?.success) {
+		if (known?.has) devstatsWifiRouters.delete(router);
+		else devstatsWifiRouters.set(router, { has: false, checkedAt: nowSec });
+		return null;
+	}
+	devstatsWifiRouters.set(router, { has: true, checkedAt: nowSec });
+	const radios = parsed.data.result[1];
+	return ifnames.map((ifname) => {
+		const radio = radios[ifname];
+		if (!radio || (!radio.sta && !radio.hostapd)) return null;
+		return {
+			// iwinfo reports 0 for a missing signal/noise; keep that.
+			iwinfo:
+				radio.sta?.map(([mac, signal, rx, tx]) => ({
+					mac: mac.toUpperCase(),
+					signal: signal ?? 0,
+					noise: radio.noise ?? 0,
+					rx: { bytes: rx },
+					tx: { bytes: tx }
+				})) ?? null,
+			hostapd: radio.hostapd
+				? Object.fromEntries(
+						radio.hostapd.map(([mac, signal, rx, tx]) => [
+							mac,
+							{
+								signal: signal ?? undefined,
+								bytes: rx !== null && tx !== null ? { rx, tx } : undefined
+							}
+						])
+					)
+				: null
+		};
+	});
+}
+
+// Without devstats: iwinfo assoclist + hostapd get_clients for every radio.
+async function fetchRadioClientsFull(
+	router: string,
+	ifnames: string[]
+): Promise<(RadioClients | null)[]> {
+	// Fetched together (one HTTP request per router, see postUbus).
+	const responses = await Promise.all(
+		ifnames.map((ifname) =>
+			ubusBatchCall({
+				displayName: router,
+				calls: [
+					{ id: 1, params: ['iwinfo', 'assoclist', { device: ifname }] },
+					{ id: 2, params: [`hostapd.${ifname}`, 'get_clients', {}] }
+				]
+			})
+		)
+	);
+	return responses.map((ubusResponse) => {
+		if (!ubusResponse.success) {
+			logError({
+				displayName: router,
+				errorMessage: 'Failed to get iwinfo or hostapd data',
+				...ubusResponse
+			});
+			return null;
+		}
+		const parsedClientsResponse = wifiClientsSchema.safeParse(
+			ubusResponse.data.find((response) => response.id === 1)
+		);
+		const parsedHostapdResponse = wifiHostapdClientsSchema.safeParse(
+			ubusResponse.data.find((response) => response.id === 2)
+		);
+		if (!parsedClientsResponse.success && !parsedHostapdResponse.success) {
+			logError({
+				displayName: router,
+				errorMessage: 'Failed to parse iwinfo or hostapd data',
+				zodErrors: [parsedClientsResponse.error, parsedHostapdResponse.error],
+				...ubusResponse
+			});
+			return null;
+		}
+		return {
+			iwinfo: parsedClientsResponse.success
+				? parsedClientsResponse.data.result[1].results
+				: null,
+			hostapd: parsedHostapdResponse.success
+				? parsedHostapdResponse.data.result[1].clients
+				: null
+		};
+	});
+}
+
 export async function getWifiClientsTraffic(ifnames: {
 	[key: string]: {
 		ifname: string;
@@ -540,55 +664,15 @@ export async function getWifiClientsTraffic(ifnames: {
 			Object.keys(ifnames).map(async (router) => {
 				const allifname = ifnames[router];
 				perRadio[router] = {};
-				// Fetched together (one HTTP request per router, see postUbus),
-				// processed in order below.
-				const responses = await Promise.all(
-					allifname.map((ifname) =>
-						ubusBatchCall({
-							displayName: router,
-							calls: [
-								{
-									id: 1,
-									params: ['iwinfo', 'assoclist', { device: ifname.ifname }]
-								},
-								{ id: 2, params: [`hostapd.${ifname.ifname}`, 'get_clients', {}] }
-							]
-						})
-					)
-				);
+				const names = allifname.map((ifname) => ifname.ifname);
+				const radios =
+					(await fetchRadioClientsDevstats(router, names)) ??
+					(await fetchRadioClientsFull(router, names));
 				for (const [i, ifname] of allifname.entries()) {
-					const ubusResponse = responses[i];
-					if (!ubusResponse.success) {
-						logError({
-							displayName: router,
-							errorMessage: 'Failed to get iwinfo or hostapd data',
-							...ubusResponse
-						});
-						continue;
-					}
-					const parsedClientsResponse = wifiClientsSchema.safeParse(
-						ubusResponse.data.find((response) => response.id === 1)
-					);
-					const parsedHostapdResponse = wifiHostapdClientsSchema.safeParse(
-						ubusResponse.data.find((response) => response.id === 2)
-					);
-					if (
-						!parsedClientsResponse.success &&
-						!parsedHostapdResponse.success
-					) {
-						logError({
-							displayName: router,
-							errorMessage: 'Failed to parse iwinfo or hostapd data',
-							zodErrors: [
-								parsedClientsResponse.error,
-								parsedHostapdResponse.error
-							],
-							...ubusResponse
-						});
-						continue;
-					}
-					if (parsedClientsResponse.success) {
-						const wifiClients = parsedClientsResponse.data.result[1].results;
+					const radio = radios[i];
+					if (!radio) continue;
+					if (radio.iwinfo) {
+						const wifiClients = radio.iwinfo;
 						perRadio[router][ifname.ifname] = {
 							clientCount: wifiClients.length,
 							signals: wifiClients.map((client) => client.signal),
@@ -624,10 +708,8 @@ export async function getWifiClientsTraffic(ifnames: {
 						}
 					}
 
-					if (parsedHostapdResponse.success) {
-						const hostapdClients = Object.values(
-							parsedHostapdResponse.data.result[1].clients
-						);
+					if (radio.hostapd) {
+						const hostapdClients = Object.values(radio.hostapd);
 						if (!perRadio[router][ifname.ifname]) {
 							perRadio[router][ifname.ifname] = {
 								clientCount: hostapdClients.length,
@@ -637,10 +719,8 @@ export async function getWifiClientsTraffic(ifnames: {
 								noises: []
 							};
 						}
-						for (const key of Object.keys(
-							parsedHostapdResponse.data.result[1].clients
-						)) {
-							const client = parsedHostapdResponse.data.result[1].clients[key];
+						for (const key of Object.keys(radio.hostapd)) {
+							const client = radio.hostapd[key];
 							if (client.bytes) {
 								addStation(
 									key.toUpperCase(),

@@ -139,6 +139,23 @@ export const devstatsSchema = z.object({
 	])
 });
 
+// `devstats wifi` (devstats >= 2): per interface, the station table as
+// [mac, signal, rx_bytes, tx_bytes] (same data as iwinfo assoclist), channel
+// noise, and hostapd's clients as [mac, signal, rx_bytes, tx_bytes] (null when
+// there is no hostapd for the interface). Counters are from the AP's side.
+const devstatsWifiRadioSchema = z.object({
+	noise: z.number().nullable(),
+	sta: z.array(z.tuple([z.string(), z.number().nullable(), z.number(), z.number()])).nullable(),
+	hostapd: z
+		.array(z.tuple([z.string(), z.number().nullable(), z.number().nullable(), z.number().nullable()]))
+		.nullable()
+});
+export const devstatsWifiSchema = z.object({
+	jsonrpc: z.string(),
+	id: z.number(),
+	result: z.tuple([z.literal(0), z.record(z.string(), devstatsWifiRadioSchema)])
+});
+
 export const networkDeviceStatusSchema = z.object({
 	jsonrpc: z.string(),
 	id: z.number(),
