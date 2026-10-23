@@ -9,7 +9,12 @@ import {
 	ChartTooltipContent
 } from './ui/chart';
 import { LoaderCircle } from 'lucide-react';
-import { RangePicker, useMetricHistory, DEFAULT_RANGE_SECONDS } from './BandwidthHistoryChart';
+import {
+	RangePicker,
+	useMetricHistory,
+	DEFAULT_RANGE_SECONDS,
+	windowTicks
+} from './BandwidthHistoryChart';
 import { useTimeRange } from '@/providers/timeRangeContext';
 import { formatBand } from '@/lib/utils';
 import { PresenceSegments } from '@/app/api/presence/[mac]/segments/route';
@@ -94,7 +99,8 @@ export function SignalHistoryChart({
 			return data.data;
 		},
 		enabled: presenceEnabled,
-		refetchInterval: rangeSeconds <= 3600 ? 15000 : 60_000
+		// Same cadence as the signal line (useMetricHistory).
+		refetchInterval: rangeSeconds <= 3600 ? 5000 : 60_000
 	});
 
 	const chartData = (query.data || [])
@@ -161,13 +167,18 @@ export function SignalHistoryChart({
 								fill={segmentColors.get(`${segment.router}::${segment.band}`)}
 								fillOpacity={SEGMENT_FILL_OPACITY}
 								stroke="none"
-								ifOverflow="visible"
+								ifOverflow="hidden"
 							/>
 						))}
 						<XAxis
 							dataKey="timestamp"
 							type="number"
-							domain={['dataMin', 'dataMax']}
+							// The selected window, like the bandwidth charts - fitting it to
+							// the signal data instead let AP shading outside the data's span
+							// spill past the plot, out of line with the signal.
+							domain={[now - rangeSeconds, now]}
+							ticks={windowTicks(now, rangeSeconds)}
+							allowDataOverflow
 							tickFormatter={(ts) => timeTickFormat(Number(ts), rangeSeconds)}
 							tick={{ fontSize: 10 }}
 							minTickGap={30}

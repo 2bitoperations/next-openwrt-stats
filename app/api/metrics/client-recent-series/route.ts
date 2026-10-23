@@ -1,10 +1,22 @@
-import { getClientRecentSeries } from '@/lib/server/metrics';
+import { getClientRecentSeries, getClientSparkSeries } from '@/lib/server/metrics';
 import { jsonResponse } from '@/lib/server/jsonResponse';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
 	try {
 		const params = new URL(request.url).searchParams;
+		// Longer ranges (the page's time range, past the 5-minute raw window):
+		// bucketed rollups, see getClientSparkSeries.
+		const rawRange = Number(params.get('rangeSeconds'));
+		if (Number.isFinite(rawRange) && rawRange > 300) {
+			const response = await getClientSparkSeries(
+				Math.round(Math.min(rawRange, 366 * 24 * 60 * 60))
+			);
+			if (!response.success) {
+				return await jsonResponse(response, 400);
+			}
+			return await jsonResponse(response);
+		}
 		const rawWindow = params.get('windowSeconds');
 		let windowSeconds = 300;
 		if (rawWindow !== null) {

@@ -6,8 +6,6 @@ if [ -f "/app/db/next-openwrt-stats.db" ]; then
 fi
 
 cd /app/drizzle && node db-migrations.js
-if [ "$PRESENCE_ENABLED" = "true" ]; then
-	cd /app && node presence-cron.js &
-fi
+# Presence events are recorded by the metrics collector (lib/server/presence.ts).
 cd /app && node metrics-cron.js &
 cd /app && node server.js

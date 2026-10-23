@@ -33,6 +33,8 @@ import {
 } from './ui/select';
 import { useMemo, useState } from 'react';
 import { useActiveRouter } from '@/providers/activeRouterContext';
+import { useTimeRange } from '@/providers/timeRangeContext';
+import { DEFAULT_RANGE_SECONDS } from './BandwidthHistoryChart';
 import { ClientHistoryDialog } from './ClientHistoryDialog';
 import { ClientProtocolHoverCard } from './ClientProtocolHoverCard';
 import { ClientSparkline } from './ClientSparkline';
@@ -217,14 +219,29 @@ export default function ClientCards({
 		refetchInterval: 5000
 	});
 
+	// Sparklines follow the page's time range: the 5-minute window is raw
+	// samples, fetched incrementally every 5 s; longer ranges are ~60 rollup
+	// buckets per client, refetched whole every 60 s (rollups lag minutes anyway).
+	const sparkRangeSeconds = useTimeRange()?.rangeSeconds ?? DEFAULT_RANGE_SECONDS;
+	const sparkRaw = sparkRangeSeconds <= 300;
 	const queryClient = useQueryClient();
 	const clientRecentSeriesQuery = useQuery({
-		queryKey: ['clientRecentSeries'],
+		queryKey: ['clientRecentSeries', sparkRangeSeconds],
 		queryFn: async () => {
-			// 5-minute window (the endpoint's default), fetched incrementally.
-			const from = Math.floor(Date.now() / 1000) - 300;
+			if (!sparkRaw) {
+				const res = await fetch(
+					`/api/metrics/client-recent-series?rangeSeconds=${sparkRangeSeconds}`
+				);
+				const data = (await res.json()) as ClientRecentSeries;
+				if (!data.success) throw new Error(data.errorMessage);
+				return data.data;
+			}
+			const from = Math.floor(Date.now() / 1000) - sparkRangeSeconds;
 			type Series = Extract<ClientRecentSeries, { success: true }>['data'];
-			const cached = queryClient.getQueryData<Series>(['clientRecentSeries']);
+			const cached = queryClient.getQueryData<Series>([
+				'clientRecentSeries',
+				sparkRangeSeconds
+			]);
 			const last = cached
 				? Object.values(cached)
 						.map((points) => lastTimestamp(points))
@@ -233,7 +250,8 @@ export default function ClientCards({
 				: undefined;
 			const since = sinceFor(last !== undefined && last > -Infinity ? last : undefined, from);
 			const res = await fetch(
-				'/api/metrics/client-recent-series' + (since !== undefined ? `?since=${since}` : '')
+				`/api/metrics/client-recent-series?windowSeconds=${sparkRangeSeconds}` +
+					(since !== undefined ? `&since=${since}` : '')
 			);
 			const data = (await res.json()) as ClientRecentSeries;
 			if (!data.success) throw new Error(data.errorMessage);
@@ -245,11 +263,13 @@ export default function ClientCards({
 			}
 			return merged;
 		},
-		refetchInterval: 5000
+		// Keep the old range's lines up while a new range loads.
+		placeholderData: (previous) => previous,
+		refetchInterval: sparkRaw ? 5000 : 60_000
 	});
 
 	// One y-axis scale for every card's sparkline: the highest single download or
-	// upload sample of any listed client in the 5-minute window (bits/s), so the
+	// upload point of any listed client in the selected range (bits/s), so the
 	// mini-graphs are comparable across cards.
 	const sparkMaxBits = useMemo(() => {
 		const series = clientRecentSeriesQuery.data;
@@ -458,6 +478,7 @@ export default function ClientCards({
 						rate={rates.get(device.macAddress.toUpperCase())}
 						recentSeries={clientRecentSeriesQuery.data?.[device.macAddress.toUpperCase()]}
 						sparkMaxBits={sparkMaxBits}
+						sparkRangeSeconds={sparkRangeSeconds}
 						presenceEnabled={presenceEnabled}
 						htmodeByRouterBand={htmodeByRouterBand}
 					/>
@@ -473,6 +494,7 @@ function ClientCard({
 	rate,
 	recentSeries,
 	sparkMaxBits,
+	sparkRangeSeconds,
 	presenceEnabled,
 	htmodeByRouterBand
 }: {
@@ -485,6 +507,7 @@ function ClientCard({
 	rate: Rate | undefined;
 	recentSeries?: { timestamp: number; rxAvg: number; txAvg: number }[];
 	sparkMaxBits?: number;
+	sparkRangeSeconds: number;
 	wifiData: WifiDataEntry | undefined;
 	presenceEnabled: boolean;
 	htmodeByRouterBand: Map<string, string>;
@@ -526,7 +549,11 @@ function ClientCard({
 						presenceEnabled={presenceEnabled}
 					>
 						<div className="-m-1 cursor-pointer space-y-1.5 rounded-md p-1 pb-1 transition-colors hover:bg-white/5">
-							<ClientSparkline points={recentSeries} yMaxBits={sparkMaxBits} />
+							<ClientSparkline
+								points={recentSeries}
+								yMaxBits={sparkMaxBits}
+								windowSeconds={sparkRangeSeconds}
+							/>
 						</div>
 					</ClientHistoryDialog>
 					<p className="flex justify-between">

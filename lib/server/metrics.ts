@@ -15,6 +15,7 @@ import { getRoutersWithId } from './router';
 import { getNetworkDeviceStats } from './routerInterfaces';
 import { getWifiClientsTraffic, getWifiRadios, type WifiClientsTraffic } from './wifiAPs';
 import { getHostTrafficTotals } from './hostTraffic';
+import { recordPresence } from './presence';
 import {
 	ClientCounterTracker,
 	MAX_SPAN_SECONDS,
@@ -315,6 +316,7 @@ function updateLatestWifiClients(
 	}
 	for (const router of responded) stationPolledRouters.add(router);
 	latestWifi.latestWifiClients = { updatedAt: nowSec, data };
+	return data;
 }
 
 export function getLatestWifiClients() {
@@ -346,7 +348,8 @@ async function computeClientAndRadioSampleRows(
 		if (traffic.success) {
 			wifi = traffic.data;
 			stations = traffic.stations;
-			updateLatestWifiClients(traffic.clients, traffic.responded, nowSec);
+			const latest = updateLatestWifiClients(traffic.clients, traffic.responded, nowSec);
+			if (process.env.PRESENCE_ENABLED === 'true') await recordPresence(latest, nowSec);
 
 			for (const [displayName, radios] of Object.entries(traffic.perRadio)) {
 				const routerId = routerIdByName.get(displayName);
@@ -1408,6 +1411,70 @@ export async function getClientRecentSeries(windowSeconds: number, since?: numbe
 }
 
 export type ClientRecentSeries = Awaited<ReturnType<typeof getClientRecentSeries>>;
+
+// Client-card sparklines for ranges past the raw window: ~SPARK_POINTS
+// buckets per client from the tier the charts would use (pickTier), each the
+// mean of the rollup rows inside it; a bucket with no rows (client idle or
+// away) is 0. One query for every client.
+const SPARK_POINTS = 60;
+export async function getClientSparkSeries(rangeSeconds: number) {
+	const now = Math.floor(Date.now() / 1000);
+	const from = now - rangeSeconds;
+	const tier = pickTier(rangeSeconds);
+	const tierStep = tier === '1h' ? 3600 : tier === '5m' ? 300 : 60;
+	const step = Math.max(1, Math.round(rangeSeconds / SPARK_POINTS / tierStep)) * tierStep;
+	const bucketExpr = sql<number>`cast(${metricSampleTable.timestamp} / ${step} as int)`;
+	try {
+		const rows = await db
+			.select({
+				mac: metricSeriesTable.key,
+				bucket: bucketExpr,
+				rxAvg: avg(metricSampleTable.rxAvg),
+				txAvg: avg(metricSampleTable.txAvg)
+			})
+			.from(metricSampleTable)
+			.innerJoin(metricSeriesTable, eq(metricSeriesTable.id, metricSampleTable.seriesId))
+			.where(
+				and(
+					eq(metricSeriesTable.scope, 'client'),
+					eq(metricSampleTable.tier, tier),
+					gte(metricSampleTable.timestamp, from)
+				)
+			)
+			.groupBy(metricSeriesTable.key, bucketExpr);
+
+		const byMac = new Map<string, Map<number, { rxAvg: number; txAvg: number }>>();
+		for (const row of rows) {
+			if (!byMac.has(row.mac)) byMac.set(row.mac, new Map());
+			byMac.get(row.mac)!.set(Number(row.bucket), {
+				rxAvg: Math.round(Number(row.rxAvg) || 0),
+				txAvg: Math.round(Number(row.txAvg) || 0)
+			});
+		}
+		// Rollups lag the raw tier by a few minutes: the grid ends at the newest
+		// bucket any client has, not at now (a falsely empty tail otherwise).
+		let lastBucket = Math.floor(from / step);
+		for (const buckets of byMac.values()) {
+			for (const b of buckets.keys()) lastBucket = Math.max(lastBucket, b);
+		}
+		const data: {
+			[mac: string]: { timestamp: number; rxAvg: number; txAvg: number }[];
+		} = {};
+		for (const [mac, buckets] of byMac) {
+			const points = [];
+			for (let b = Math.floor(from / step); b <= lastBucket; b++) {
+				const v = buckets.get(b) ?? { rxAvg: 0, txAvg: 0 };
+				// Stamped at the bucket's middle.
+				points.push({ timestamp: b * step + step / 2, ...v });
+			}
+			data[mac] = points;
+		}
+		return { success: true, data } as const;
+	} catch (error) {
+		logError({ errorMessage: 'Failed to get client spark series', error });
+		return { success: false, errorMessage: 'Failed to get client spark series' } as const;
+	}
+}
 
 const LATEST_RATE_STALE_AFTER_SECONDS = 15;
 
