@@ -145,7 +145,11 @@ export const metricSampleTable = sqliteTable(
 			table.seriesId,
 			table.tier,
 			table.timestamp
-		)
+		),
+		// Rollups and pruning filter on tier + time across all series; without
+		// this each bucket query scanned the whole lookup index (~0.8 s at
+		// 4.5M rows, blocking the event loop).
+		index('metric_sample_tier_time').on(table.tier, table.timestamp)
 	]
 );
 

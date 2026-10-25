@@ -1,0 +1,1 @@
+CREATE INDEX `metric_sample_tier_time` ON `metric_sample` (`tier`,`timestamp`);
