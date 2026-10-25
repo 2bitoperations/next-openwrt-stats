@@ -43,6 +43,12 @@ const RADIO_CONFIG_EVERY_N_TICKS = 10; // wifi radio config + dhcp leases every 
 const ROUTER_INFO_EVERY_N_TICKS = 30; // uptime/load/mem every ~30s
 const WAN_FAILOVER_EVERY_N_TICKS = 20; // active-WAN state every ~20s - the router's own watchdog already does the real 5s/15s work, this just mirrors it
 const PRUNE_EVERY_N_TICKS = 60; // raw retention is 5 minutes, pruning once/minute is plenty
+// A tick is skipped while the previous one is still running, so a fetch-phase
+// promise that never settled used to stop the collector for good (2026-10-24:
+// nothing written for ~19 h, nothing logged). Router requests time out after
+// 8 s and dead routers are backed off, so a normal fetch phase is far below
+// this; past it the tick is abandoned and its still-pending parts are logged.
+const FETCH_PHASE_DEADLINE_MS = 60_000;
 const MAX_CATCHUP_BUCKETS = 120;
 // A bucket is rolled up only this long after it ends: late rate updates and
 // backdated rows (counterDiff.ts) reach back up to MAX_SPAN_SECONDS. Must stay
@@ -678,6 +684,18 @@ async function pruneOldSamples(tx: DbClient, nowSec: number) {
 		);
 }
 
+function withDeadline<T>(
+	promise: Promise<T>,
+	ms: number,
+	message: () => string
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(message())), ms);
+	});
+	return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 export async function collectTick() {
 	if (isCollecting) return;
 	isCollecting = true;
@@ -698,29 +716,44 @@ export async function collectTick() {
 		// Concurrently, so that each router's calls for this tick are
 		// coalesced into one HTTP request (see postUbus in ubusCalls.ts).
 		const radioTick = tickCount % RADIO_CONFIG_EVERY_N_TICKS === 0;
+		const pending = new Set<string>();
+		const track = <T>(name: string, promise: Promise<T>) => {
+			pending.add(name);
+			return promise.finally(() => pending.delete(name));
+		};
 		const [
 			interfaceRows,
 			[radioSnapshot, dhcpLeases],
 			routerSnapshotRows,
 			wanFailoverRows,
 			clientRadioRows
-		] = await Promise.all([
-			computeInterfaceSampleRows(routers.data, nowSec),
-			radioTick
-				? fetchWifiRadioSnapshot(routers.data).then(
-						async (snapshot) => [snapshot, await getDhcpDevices()] as const
-					)
-				: ([null, null] as const),
-			tickCount % ROUTER_INFO_EVERY_N_TICKS === 0
-				? fetchRouterSnapshotRows(routers.data)
-				: [],
-			tickCount % WAN_FAILOVER_EVERY_N_TICKS === 0
-				? fetchWanFailoverStateRows(routers.data)
-				: [],
-			tickCount % CLIENT_POLL_EVERY_N_TICKS === 0
-				? computeClientAndRadioSampleRows(routers.data, nowSec)
-				: ({ rows: [], updates: [] } as SampleRows)
-		]);
+		] = await withDeadline(
+			Promise.all([
+				track('interfaces', computeInterfaceSampleRows(routers.data, nowSec)),
+				radioTick
+					? track(
+							'radio config + dhcp',
+							fetchWifiRadioSnapshot(routers.data).then(
+								async (snapshot) => [snapshot, await getDhcpDevices()] as const
+							)
+						)
+					: ([null, null] as const),
+				tickCount % ROUTER_INFO_EVERY_N_TICKS === 0
+					? track('router info', fetchRouterSnapshotRows(routers.data))
+					: [],
+				tickCount % WAN_FAILOVER_EVERY_N_TICKS === 0
+					? track('wan failover', fetchWanFailoverStateRows(routers.data))
+					: [],
+				tickCount % CLIENT_POLL_EVERY_N_TICKS === 0
+					? track(
+							'clients + radios',
+							computeClientAndRadioSampleRows(routers.data, nowSec)
+						)
+					: ({ rows: [], updates: [] } as SampleRows)
+			]),
+			FETCH_PHASE_DEADLINE_MS,
+			() => `fetch phase still pending: ${[...pending].join(', ')}`
+		);
 
 		// Write phase - everything below is pure DB work, batched into one
 		// transaction so it fsyncs once instead of once per statement.
